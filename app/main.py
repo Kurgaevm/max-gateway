@@ -218,6 +218,14 @@ def normalize_phone(p: str) -> str:
     return "+" + d
 
 
+def attach_type(a: Any) -> str:
+    """Значение типа вложения ('AUDIO', 'PHOTO', ...) без префикса enum."""
+    t = getattr(a, "type", None)
+    if t is None:
+        return ""
+    return str(getattr(t, "value", t))
+
+
 def sender_display_name(c: Client, user_id: Any) -> Optional[str]:
     if user_id is None:
         return None
@@ -300,7 +308,7 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     mid = getattr(message, "id", None)
     attaches = list(getattr(message, "attaches", None) or [])
 
-    voice = next((a for a in attaches if str(getattr(a, "type", "")) == "AUDIO"), None)
+    voice = next((a for a in attaches if attach_type(a) == "AUDIO"), None)
     if voice is not None:
         message_data = await handle_voice(inst, c, voice, chat_id, mid)
     elif text:
@@ -311,7 +319,7 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     else:
         message_data = {
             "typeMessage": "attachmentMessage",
-            "attaches": [{"type": str(getattr(a, "type", None) or "")} for a in attaches],
+            "attaches": [{"type": attach_type(a)} for a in attaches],
         }
 
     payload = {
