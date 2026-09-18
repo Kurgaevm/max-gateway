@@ -70,6 +70,9 @@ class Inst:
         self.last_incoming: Any = None
         self.last_webhook: Any = None
         self.recent: deque = deque(maxlen=25)
+        # chat routing: user_id -> raw DM chat_id (Green-API dialect on the outside)
+        self.chat_map: dict[int, int] = {}
+        self.known_chats: set[int] = set()
         self.sms_queue: asyncio.Queue = asyncio.Queue()
         self.pw_queue: asyncio.Queue = asyncio.Queue()
         self.client: Optional[Client] = None
@@ -111,6 +114,8 @@ def save_instances() -> None:
                 "api_key": i.api_key,
                 "webhook_url": i.webhook_url,
                 "created": i.created,
+                "chat_map": {str(k): v for k, v in i.chat_map.items()},
+                "known_chats": sorted(i.known_chats),
             }
             for i in INSTANCES.values()
         ]
@@ -126,7 +131,12 @@ def load_instances() -> None:
         with open(INST_FILE, encoding="utf-8") as f:
             data = json.load(f)
         for e in data.get("instances", []):
-            INSTANCES[e["name"]] = Inst(**e)
+            cm = {int(k): int(v) for k, v in (e.pop("chat_map", None) or {}).items()}
+            kc = set(int(x) for x in (e.pop("known_chats", None) or []))
+            inst = Inst(**e)
+            inst.chat_map = cm
+            inst.known_chats = kc
+            INSTANCES[inst.name] = inst
         return
     # миграция с одиночной версии: maxgw.db -> sessions/default.db
     legacy_db = os.path.join(WORK_DIR, "maxgw.db")
@@ -287,14 +297,18 @@ async def handle_voice(inst: Inst, c: Client, voice: Any,
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] voice download failed: %s", inst.name, e)
     md: dict[str, Any] = {
-        "typeMessage": "voiceMessage",
         "voiceMessageData": {
             "duration": getattr(voice, "duration", None),
             "transcript": transcript,
         },
     }
     if transcript:
+        # Green-API-compatible consumers (incl. the salon n8n brain) treat
+        # transcribed voice as plain text without any extra handling.
+        md["typeMessage"] = "textMessage"
         md["textMessageData"] = {"textMessage": transcript}
+    else:
+        md["typeMessage"] = "voiceMessage"
     return md
 
 
@@ -307,6 +321,23 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     chat_id = getattr(message, "chat_id", None)
     mid = getattr(message, "id", None)
     attaches = list(getattr(message, "attaches", None) or [])
+
+    # Green-API dialect: in DMs the chatId equals the peer user_id.
+    # Raw MAX DM chat_id = me ^ peer (see Client.get_chat_id, XOR).
+    api_chat_id: Any = chat_id
+    try:
+        raw = int(chat_id)
+        changed = raw not in inst.known_chats
+        inst.known_chats.add(raw)
+        if me_id is not None and sid is not None and raw == int(me_id) ^ int(sid):
+            api_chat_id = int(sid)  # личный чат: chatId = user_id собеседника
+            if inst.chat_map.get(int(sid)) != raw:
+                inst.chat_map[int(sid)] = raw
+                changed = True
+        if changed:
+            save_instances()
+    except (TypeError, ValueError):
+        pass
 
     voice = next((a for a in attaches if attach_type(a) == "AUDIO"), None)
     if voice is not None:
@@ -333,7 +364,8 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
         "timestamp": int(time.time()),
         "idMessage": str(mid) if mid is not None else uuid.uuid4().hex,
         "senderData": {
-            "chatId": str(chat_id) if chat_id is not None else None,
+            "chatId": str(api_chat_id) if api_chat_id is not None else None,
+            "rawChatId": str(chat_id) if chat_id is not None else None,
             "senderId": str(sid) if sid is not None else None,
             "senderName": sender_display_name(c, sid),
         },
@@ -458,6 +490,8 @@ def is_admin(key: str) -> bool:
 
 def require_admin(x_api_key: str) -> None:
     if not is_admin(x_api_key):
+        log.warning("auth fail (admin): key=%r len=%s",
+                    (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
         raise HTTPException(status_code=401, detail="bad admin key")
 
 
@@ -470,6 +504,8 @@ def get_inst(name: str) -> Inst:
 
 def require_inst(x_api_key: str, inst: Inst) -> None:
     if not (is_admin(x_api_key) or (inst.api_key and x_api_key == inst.api_key)):
+        log.warning("auth fail (%s): key=%r len=%s", inst.name,
+                    (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
         raise HTTPException(status_code=401, detail="bad api key")
 
 
@@ -548,6 +584,22 @@ async def act_reset(inst: Inst) -> dict:
     return {"ok": True, "session_deleted": removed, "stage": inst.stage}
 
 
+def resolve_chat_id(inst: Inst, value: int) -> int:
+    """Accepts Green-API style ids: DM user_id or raw chat (group) id.
+
+    Priority: learned user_id->raw map, then ids seen as real chats,
+    then the XOR formula (DM: raw = me ^ user_id).
+    """
+    v = int(value)
+    if v in inst.chat_map:
+        return inst.chat_map[v]
+    if v in inst.known_chats:
+        return v
+    if inst.me is not None:
+        return int(inst.me) ^ v
+    return v
+
+
 async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
     if inst.client is None or inst.stage != "authorized":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
@@ -564,7 +616,9 @@ async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
         res = inst.client.get_chat_id(first_user_id=me_id, second_user_id=contact.id)
         if asyncio.iscoroutine(res):
             res = await res
-        chat_id = res
+        chat_id = res  # уже raw chat_id, разрешать не нужно
+    else:
+        chat_id = resolve_chat_id(inst, chat_id)
     sent = await inst.client.send_message(chat_id=chat_id, text=body.message)
     mid = getattr(sent, "id", None)
     return {"ok": True, "instance": inst.name, "chatId": str(chat_id),

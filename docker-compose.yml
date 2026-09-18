@@ -20,3 +20,13 @@ services:
       SESSION_NAME: maxgw.db
       LOG_LEVEL: INFO
       PYMAX_LOG_LEVEL: INFO
+    networks:
+      - default
+      - n8n
+
+networks:
+  default:
+    name: maxgateway_default
+  n8n:
+    name: localai_default
+    external: true
