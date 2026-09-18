@@ -1,14 +1,20 @@
-"""MAX gateway: self-hosted Green-API-like bridge for MAX messenger.
+"""MAX Шлюз: self-hosted шлюз для мессенджера MAX (мультиаккаунтный).
 
-FastAPI + PyMax (unofficial internal MAX API).
-- Login by phone + SMS code (code delivered via POST /code)
-- Incoming messages -> optional webhook (Green-API compatible payload)
-- Outgoing: POST /sendText (by phone or chat_id)
+FastAPI + PyMax (неофициальный внутренний API MAX).
+- Несколько аккаунтов (инстансов) на одну установку
+- Вход по телефону + SMS-код (код передаётся через API/веб-интерфейс)
+- Входящие сообщения -> вебхук на URL инстанса (формат совместим с Green-API)
+- Голосовые сообщения: скачивание + расшифровка через OpenAI-совместимый STT
+- Исходящие: POST /i/{name}/sendText
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
+import secrets
+import shutil
 import time
 import uuid
 from collections import deque
@@ -28,77 +34,175 @@ logging.basicConfig(
 )
 log = logging.getLogger("maxgw")
 
-API_KEY = os.environ.get("GATEWAY_API_KEY", "")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
+API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
+GLOBAL_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
 WORK_DIR = os.environ.get("WORK_DIR", "/data")
-SESSION_NAME = os.environ.get("SESSION_NAME", "maxgw.db")
+SESSIONS_DIR = os.path.join(WORK_DIR, "sessions")
+INST_FILE = os.path.join(WORK_DIR, "instances.json")
 PHONE = os.environ.get("PHONE", "").strip()
 CODE_TIMEOUT = int(os.environ.get("CODE_TIMEOUT", "900"))
+MAX_VOICE_BYTES = 20 * 1024 * 1024
 
-state: dict[str, Any] = {
-    "stage": "idle",  # idle|connecting|awaiting_code|awaiting_password|authorized|error
-    "phone": None,
-    "me": None,
-    "hint": None,
-    "error": None,
-    "last_incoming": None,
-    "last_webhook": None,
-    "started_at": time.time(),
-}
-recent: deque = deque(maxlen=25)
+# Расшифровка голосовых: любой OpenAI-совместимый endpoint /v1/audio/transcriptions
+STT_BASE_URL = os.environ.get("STT_BASE_URL", "").rstrip("/")
+STT_API_KEY = os.environ.get("STT_API_KEY", "")
+STT_MODEL = os.environ.get("STT_MODEL", "whisper-1")
 
-sms_queue: asyncio.Queue = asyncio.Queue()
-pw_queue: asyncio.Queue = asyncio.Queue()
 
-client: Optional[Client] = None
-client_task: Optional[asyncio.Task] = None
+# ---------------------------------------------------------------- instances
+
+
+class Inst:
+    def __init__(self, name: str, phone: Optional[str] = None,
+                 api_key: Optional[str] = None, webhook_url: str = "",
+                 created: Optional[float] = None) -> None:
+        self.name = name
+        self.phone = phone
+        self.api_key = api_key or secrets.token_hex(24)
+        self.webhook_url = webhook_url or ""
+        self.created = created or time.time()
+        # runtime
+        self.stage = "idle"
+        self.me: Any = None
+        self.hint: Any = None
+        self.error: Any = None
+        self.connected = False
+        self.last_incoming: Any = None
+        self.last_webhook: Any = None
+        self.recent: deque = deque(maxlen=25)
+        self.sms_queue: asyncio.Queue = asyncio.Queue()
+        self.pw_queue: asyncio.Queue = asyncio.Queue()
+        self.client: Optional[Client] = None
+        self.task: Optional[asyncio.Task] = None
+
+    def summary(self) -> dict:
+        return {
+            "name": self.name,
+            "phone": self.phone,
+            "stage": self.stage,
+            "connected": self.connected,
+            "me": self.me,
+            "webhook_url": self.webhook_url or GLOBAL_WEBHOOK_URL or None,
+        }
+
+    def status(self) -> dict:
+        return {
+            "instance": self.name,
+            "stage": self.stage,
+            "phone": self.phone,
+            "me": self.me,
+            "hint": self.hint,
+            "error": self.error,
+            "connected": bool(self.client is not None and getattr(self.client, "is_connected", False)),
+            "last_incoming": self.last_incoming,
+            "last_webhook": self.last_webhook,
+        }
+
+
+INSTANCES: dict[str, Inst] = {}
+
+
+def save_instances() -> None:
+    data = {
+        "instances": [
+            {
+                "name": i.name,
+                "phone": i.phone,
+                "api_key": i.api_key,
+                "webhook_url": i.webhook_url,
+                "created": i.created,
+            }
+            for i in INSTANCES.values()
+        ]
+    }
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    with open(INST_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_instances() -> None:
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    if os.path.exists(INST_FILE):
+        with open(INST_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        for e in data.get("instances", []):
+            INSTANCES[e["name"]] = Inst(**e)
+        return
+    # миграция с одиночной версии: maxgw.db -> sessions/default.db
+    legacy_db = os.path.join(WORK_DIR, "maxgw.db")
+    phone = PHONE
+    if not phone:
+        try:
+            with open(os.path.join(WORK_DIR, "phone.txt"), encoding="utf-8") as f:
+                phone = f.read().strip()
+        except OSError:
+            phone = ""
+    default = Inst("default", phone=phone or None,
+                   api_key=os.environ.get("MAXGW_API_KEY") or None)
+    if os.path.exists(legacy_db):
+        shutil.move(legacy_db, os.path.join(SESSIONS_DIR, "default.db"))
+    INSTANCES[default.name] = default
+    save_instances()
+    log.info("migrated single-account install to instance 'default'")
 
 
 # ---------------------------------------------------------------- providers
 
 
-class QueueSmsProvider:
+class InstSmsProvider:
+    def __init__(self, inst: Inst) -> None:
+        self.inst = inst
+
     async def get_code(self, phone: str) -> str:
-        state.update(stage="awaiting_code", phone=phone, error=None)
-        log.info("SMS code requested by MAX for %s", phone)
+        self.inst.stage = "awaiting_code"
+        self.inst.phone = phone
+        self.inst.error = None
+        save_instances()
+        log.info("[%s] SMS code requested for %s", self.inst.name, phone)
         try:
-            code = await asyncio.wait_for(sms_queue.get(), timeout=CODE_TIMEOUT)
+            code = await asyncio.wait_for(self.inst.sms_queue.get(), timeout=CODE_TIMEOUT)
         except asyncio.TimeoutError:
-            state.update(stage="error", error="timeout waiting for SMS code")
+            self.inst.stage = "error"
+            self.inst.error = "timeout waiting for SMS code"
             raise
-        state.update(stage="connecting")
+        self.inst.stage = "connecting"
         return code
 
 
-class QueuePasswordProvider:
+class InstPasswordProvider:
+    def __init__(self, inst: Inst) -> None:
+        self.inst = inst
+
     async def get_password(self, hint: Optional[str] = None) -> str:
-        state.update(stage="awaiting_password", hint=hint)
+        self.inst.stage = "awaiting_password"
+        self.inst.hint = hint
         try:
-            pw = await asyncio.wait_for(pw_queue.get(), timeout=CODE_TIMEOUT)
+            pw = await asyncio.wait_for(self.inst.pw_queue.get(), timeout=CODE_TIMEOUT)
         except asyncio.TimeoutError:
-            state.update(stage="error", error="timeout waiting for 2FA password")
+            self.inst.stage = "error"
+            self.inst.error = "timeout waiting for 2FA password"
             raise
-        state.update(stage="connecting")
+        self.inst.stage = "connecting"
         return pw
 
 
-def build_client(phone: str) -> Client:
+def build_client(inst: Inst) -> Client:
     extra = ExtraConfig(
         log_level=os.environ.get("PYMAX_LOG_LEVEL", "INFO"),
         reconnect=True,
         reconnect_delay=3,
         registration_config=RegistrationConfig(
-            first_name=os.environ.get("REG_FIRST_NAME", "Mao"),
-            last_name=os.environ.get("REG_LAST_NAME", "Gateway"),
+            first_name=os.environ.get("REG_FIRST_NAME", "Salon"),
+            last_name=os.environ.get("REG_LAST_NAME", "Bot"),
         ),
     )
     return Client(
-        phone=phone,
+        phone=inst.phone or "",
         work_dir=WORK_DIR,
-        session_name=SESSION_NAME,
+        session_name=f"sessions/{inst.name}.db",
         extra_config=extra,
-        sms_code_provider=QueueSmsProvider(),
-        password_provider=QueuePasswordProvider(),
+        sms_code_provider=InstSmsProvider(inst),
+        password_provider=InstPasswordProvider(inst),
     )
 
 
@@ -115,7 +219,6 @@ def normalize_phone(p: str) -> str:
 
 
 def sender_display_name(c: Client, user_id: Any) -> Optional[str]:
-    """Sender display name from the client's contact cache (no network call)."""
     if user_id is None:
         return None
     try:
@@ -133,37 +236,90 @@ def sender_display_name(c: Client, user_id: Any) -> Optional[str]:
     return " ".join(parts) or None
 
 
-async def handle_incoming(message: Any, c: Client) -> None:
-    me_id = state.get("me")
+async def transcribe(data: bytes, mime: str = "audio/ogg") -> Optional[str]:
+    if not (STT_BASE_URL and STT_API_KEY):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=120) as hc:
+            r = await hc.post(
+                STT_BASE_URL,
+                headers={"Authorization": f"Bearer {STT_API_KEY}"},
+                files={"file": ("voice.ogg", data, mime)},
+                data={"model": STT_MODEL, "language": "ru"},
+            )
+            if r.status_code == 200:
+                return (r.json().get("text") or "").strip() or None
+            log.warning("STT failed: %s %s", r.status_code, r.text[:200])
+    except Exception as e:  # noqa: BLE001
+        log.warning("STT error: %s", e)
+    return None
+
+
+async def handle_voice(inst: Inst, c: Client, voice: Any,
+                       chat_id: Any, mid: Any) -> dict:
+    """Скачивает голосовое и расшифровывает, если настроен STT."""
+    url = getattr(voice, "url", None)
+    if not url and chat_id is not None and getattr(voice, "audio_id", None) is not None:
+        try:
+            fr = await c.get_file_by_id(chat_id=chat_id, message_id=mid,
+                                        file_id=voice.audio_id)
+            url = getattr(fr, "url", None) if fr is not None else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] get_file_by_id failed: %s", inst.name, e)
+    transcript: Optional[str] = None
+    if url:
+        try:
+            async with httpx.AsyncClient(timeout=90, follow_redirects=True) as hc:
+                r = await hc.get(url)
+                if r.status_code == 200 and len(r.content) <= MAX_VOICE_BYTES:
+                    transcript = await transcribe(r.content)
+                else:
+                    log.warning("[%s] voice download: status=%s size=%s",
+                                inst.name, r.status_code, len(r.content))
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] voice download failed: %s", inst.name, e)
+    md: dict[str, Any] = {
+        "typeMessage": "voiceMessage",
+        "voiceMessageData": {
+            "duration": getattr(voice, "duration", None),
+            "transcript": transcript,
+        },
+    }
+    if transcript:
+        md["textMessageData"] = {"textMessage": transcript}
+    return md
+
+
+async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
+    me_id = inst.me
     sid = getattr(message, "sender", None)  # int | None: sender user id
     if me_id is not None and sid is not None and int(sid) == int(me_id):
-        return  # own outgoing echo
+        return  # собственное исходящее
     text = getattr(message, "text", None)
     chat_id = getattr(message, "chat_id", None)
     mid = getattr(message, "id", None)
     attaches = list(getattr(message, "attaches", None) or [])
 
-    if text:
-        message_data: dict[str, Any] = {
+    voice = next((a for a in attaches if str(getattr(a, "type", "")) == "AUDIO"), None)
+    if voice is not None:
+        message_data = await handle_voice(inst, c, voice, chat_id, mid)
+    elif text:
+        message_data = {
             "typeMessage": "textMessage",
             "textMessageData": {"textMessage": text},
         }
     else:
         message_data = {
             "typeMessage": "attachmentMessage",
-            "attaches": [
-                {
-                    "type": getattr(a, "type", None) or getattr(a, "_type", None),
-                }
-                for a in attaches
-            ],
+            "attaches": [{"type": str(getattr(a, "type", None) or "")} for a in attaches],
         }
 
     payload = {
         "typeWebhook": "incomingMessageReceived",
         "instanceData": {
             "idInstance": 1,
-            "wid": state.get("phone"),
+            "instanceName": inst.name,
+            "wid": inst.phone,
             "typeInstance": "max",
         },
         "timestamp": int(time.time()),
@@ -175,22 +331,25 @@ async def handle_incoming(message: Any, c: Client) -> None:
         },
         "messageData": message_data,
     }
-    state["last_incoming"] = payload
-    recent.append({"ts": time.time(), "payload": payload})
-    log.info("incoming from %s: %s", payload["senderData"]["senderId"], (text or "<attach>")[:120])
+    inst.last_incoming = payload
+    inst.recent.append({"ts": time.time(), "payload": payload})
+    preview = (text or (voice is not None and "<голосовое>") or "<вложение>")
+    log.info("[%s] incoming from %s: %s", inst.name, payload["senderData"]["senderId"],
+             str(preview)[:120])
 
-    if WEBHOOK_URL:
+    hook = inst.webhook_url or GLOBAL_WEBHOOK_URL
+    if hook:
         try:
             async with httpx.AsyncClient(timeout=15) as hc:
-                r = await hc.post(WEBHOOK_URL, json=payload)
-                state["last_webhook"] = {"status": r.status_code}
-                log.info("webhook delivered: %s", r.status_code)
+                r = await hc.post(hook, json=payload)
+                inst.last_webhook = {"status": r.status_code}
+                log.info("[%s] webhook delivered: %s", inst.name, r.status_code)
         except Exception as e:  # noqa: BLE001
-            state["last_webhook"] = {"error": str(e)}
-            log.warning("webhook failed: %s", e)
+            inst.last_webhook = {"error": str(e)}
+            log.warning("[%s] webhook failed: %s", inst.name, e)
 
 
-def attach_handlers(c: Client) -> None:
+def attach_handlers(inst: Inst, c: Client) -> None:
     @c.on_start()
     async def _on_start(c: Client) -> None:
         me_id = None
@@ -198,76 +357,111 @@ def attach_handlers(c: Client) -> None:
             me_id = c.me.contact.id
         except Exception:  # noqa: BLE001
             pass
-        state.update(stage="authorized", connected=True, me=me_id, error=None)
-        log.info("AUTHORIZED as user_id=%s", me_id)
+        inst.stage = "authorized"
+        inst.connected = True
+        inst.me = me_id
+        inst.error = None
+        save_instances()
+        log.info("[%s] AUTHORIZED as user_id=%s", inst.name, me_id)
 
     @c.on_disconnect()
     async def _on_disc(exc: Exception, reconnect: bool, delay: float) -> None:
-        state["connected"] = False
-        log.warning("disconnected: %s reconnect=%s delay=%s", exc, reconnect, delay)
+        inst.connected = False
+        log.warning("[%s] disconnected: %s reconnect=%s", inst.name, exc, reconnect)
 
     @c.on_message()
     async def _on_message(message: Any, c: Client) -> None:
         try:
-            await handle_incoming(message, c)
+            await handle_incoming(inst, message, c)
         except Exception:  # noqa: BLE001
-            log.exception("incoming handler failed")
+            log.exception("[%s] incoming handler failed", inst.name)
 
 
-async def start_client(phone: str) -> None:
-    global client, client_task
-    if client_task is not None and not client_task.done():
-        if client is not None:
+async def start_client(inst: Inst) -> None:
+    if inst.task is not None and not inst.task.done():
+        if inst.client is not None:
             try:
-                await client.stop()
+                await inst.client.stop()
             except Exception:  # noqa: BLE001
                 pass
-        client_task.cancel()
+        inst.task.cancel()
         try:
-            await client_task
+            await inst.task
         except BaseException:  # noqa: BLE001
             pass
-    client = build_client(phone)
-    attach_handlers(client)
-    state.update(stage="connecting", phone=phone, error=None, connected=False)
+    inst.client = build_client(inst)
+    attach_handlers(inst, inst.client)
+    inst.stage = "connecting"
+    inst.error = None
+    inst.connected = False
+    client_ref = inst.client
 
     async def runner() -> None:
         try:
-            await client.start()
+            await client_ref.start()
         except asyncio.CancelledError:
             pass
         except Exception as e:  # noqa: BLE001
-            state.update(stage="error", error=f"{type(e).__name__}: {e}", connected=False)
-            log.exception("client crashed")
+            inst.stage = "error"
+            inst.error = f"{type(e).__name__}: {e}"
+            inst.connected = False
+            log.exception("[%s] client crashed", inst.name)
 
-    client_task = asyncio.create_task(runner())
+    inst.task = asyncio.create_task(runner())
+
+
+async def stop_client(inst: Inst) -> None:
+    if inst.client is not None:
+        try:
+            await inst.client.stop()
+        except Exception:  # noqa: BLE001
+            pass
+    if inst.task is not None:
+        inst.task.cancel()
+        try:
+            await inst.task
+        except BaseException:  # noqa: BLE001
+            pass
+    inst.client = None
+    inst.task = None
+    inst.connected = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    phone = PHONE
-    if not phone:
-        try:
-            with open(os.path.join(WORK_DIR, "phone.txt"), encoding="utf-8") as f:
-                phone = f.read().strip()
-        except Exception:  # noqa: BLE001
-            phone = ""
-    if phone:
-        await start_client(phone)
+    load_instances()
+    for inst in list(INSTANCES.values()):
+        if inst.phone:
+            await start_client(inst)
     yield
-    if client_task is not None:
-        client_task.cancel()
-        try:
-            await client_task
-        except BaseException:  # noqa: BLE001
-            pass
+    for inst in list(INSTANCES.values()):
+        await stop_client(inst)
 
 
 app = FastAPI(title="max-gateway", lifespan=lifespan)
 
 
-def auth(x_api_key: str) -> None:
-    if not API_KEY or x_api_key != API_KEY:
+# ---------------------------------------------------------------- auth
+
+
+def is_admin(key: str) -> bool:
+    return bool(API_KEY) and key == API_KEY
+
+
+def require_admin(x_api_key: str) -> None:
+    if not is_admin(x_api_key):
+        raise HTTPException(status_code=401, detail="bad admin key")
+
+
+def get_inst(name: str) -> Inst:
+    inst = INSTANCES.get(name)
+    if inst is None:
+        raise HTTPException(status_code=404, detail=f"instance '{name}' not found")
+    return inst
+
+
+def require_inst(x_api_key: str, inst: Inst) -> None:
+    if not (is_admin(x_api_key) or (inst.api_key and x_api_key == inst.api_key)):
         raise HTTPException(status_code=401, detail="bad api key")
 
 
@@ -292,19 +486,84 @@ class SendTextBody(BaseModel):
     chat_id: Optional[int] = None
 
 
-# ---------------------------------------------------------------- endpoints
+class CreateInstBody(BaseModel):
+    name: str
+    webhook_url: str = ""
+    phone: str = ""
 
 
-@app.get("/health")
-async def health():
+class WebhookBody(BaseModel):
+    url: str = ""
+
+
+# ---------------------------------------------------------------- actions
+
+
+async def act_login(inst: Inst, phone_raw: str) -> dict:
+    phone = normalize_phone(phone_raw)
+    old_session = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
+    if inst.phone and inst.phone != phone and os.path.exists(old_session):
+        os.remove(old_session)  # смена аккаунта: сносим старую сессию
+    inst.phone = phone
+    save_instances()
+    await start_client(inst)
+    return {"ok": True, "instance": inst.name, "phone": phone, "stage": inst.stage}
+
+
+async def act_code(inst: Inst, code: str) -> dict:
+    if inst.stage != "awaiting_code":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    await inst.sms_queue.put(code.strip())
     return {"ok": True}
 
 
-@app.get("/status")
-async def status(x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    connected = bool(client is not None and getattr(client, "is_connected", False))
-    return {**state, "connected": connected, "webhook_url_set": bool(WEBHOOK_URL)}
+async def act_password(inst: Inst, password: str) -> dict:
+    if inst.stage != "awaiting_password":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    await inst.pw_queue.put(password)
+    return {"ok": True}
+
+
+async def act_reset(inst: Inst) -> dict:
+    await stop_client(inst)
+    session_path = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
+    removed = False
+    if os.path.exists(session_path):
+        os.remove(session_path)
+        removed = True
+    inst.stage = "idle"
+    inst.me = None
+    inst.error = None
+    inst.last_incoming = None
+    if inst.phone:
+        await start_client(inst)
+    return {"ok": True, "session_deleted": removed, "stage": inst.stage}
+
+
+async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    chat_id = body.chat_id
+    if chat_id is None:
+        if not body.phone:
+            raise HTTPException(status_code=400, detail="need phone or chat_id")
+        contact = await inst.client.search_by_phone(normalize_phone(body.phone))
+        if contact is None:
+            raise HTTPException(status_code=404, detail="user not found by phone")
+        me_id = inst.me
+        if me_id is None:
+            raise HTTPException(status_code=500, detail="me unknown")
+        res = inst.client.get_chat_id(first_user_id=me_id, second_user_id=contact.id)
+        if asyncio.iscoroutine(res):
+            res = await res
+        chat_id = res
+    sent = await inst.client.send_message(chat_id=chat_id, text=body.message)
+    mid = getattr(sent, "id", None)
+    return {"ok": True, "instance": inst.name, "chatId": str(chat_id),
+            "messageId": str(mid) if mid is not None else None}
+
+
+# ---------------------------------------------------------------- routes: UI + health
 
 
 @app.get("/", include_in_schema=False)
@@ -312,96 +571,150 @@ async def index():
     return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
 
 
+@app.get("/health")
+async def health():
+    return {"ok": True, "instances": len(INSTANCES)}
+
+
+# ---------------------------------------------------------------- routes: admin
+
+
+@app.get("/admin/overview")
+async def admin_overview(x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    return {"instances": [i.summary() for i in INSTANCES.values()]}
+
+
+@app.post("/admin/instances")
+async def create_instance(body: CreateInstBody, x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    name = body.name.strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
+        raise HTTPException(status_code=400, detail="name: a-z, 0-9, _ - до 32 символов")
+    if name in INSTANCES:
+        raise HTTPException(status_code=409, detail="instance already exists")
+    inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,
+                webhook_url=body.webhook_url.rstrip("/"))
+    INSTANCES[name] = inst
+    save_instances()
+    return {"ok": True, "name": name, "api_key": inst.api_key}
+
+
+@app.get("/admin/instances")
+async def list_instances(x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    return {"instances": [
+        {**i.summary(), "api_key": i.api_key} for i in INSTANCES.values()
+    ]}
+
+
+@app.post("/admin/instances/{name}/webhook")
+async def set_webhook(name: str, body: WebhookBody, x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    inst = get_inst(name)
+    inst.webhook_url = body.url.rstrip("/")
+    save_instances()
+    return {"ok": True, "webhook_url": inst.webhook_url}
+
+
+@app.delete("/admin/instances/{name}")
+async def delete_instance(name: str, x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    inst = get_inst(name)
+    await stop_client(inst)
+    session_path = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
+    if os.path.exists(session_path):
+        os.remove(session_path)
+    del INSTANCES[name]
+    save_instances()
+    return {"ok": True, "deleted": name}
+
+
+# ---------------------------------------------------------------- routes: per-instance
+
+
+@app.get("/i/{name}/status")
+async def i_status(name: str, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return {**inst.status(), "webhook_url_set": bool(inst.webhook_url or GLOBAL_WEBHOOK_URL)}
+
+
+@app.post("/i/{name}/login")
+async def i_login(name: str, body: LoginBody, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_login(inst, body.phone)
+
+
+@app.post("/i/{name}/code")
+async def i_code(name: str, body: CodeBody, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_code(inst, body.code)
+
+
+@app.post("/i/{name}/password")
+async def i_password(name: str, body: PasswordBody, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_password(inst, body.password)
+
+
+@app.post("/i/{name}/sendText")
+async def i_send_text(name: str, body: SendTextBody, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_send_text(inst, body)
+
+
+@app.post("/i/{name}/reset")
+async def i_reset(name: str, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_reset(inst)
+
+
+@app.get("/i/{name}/recent")
+async def i_recent(name: str, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return {"items": list(inst.recent)}
+
+
+# ---------------------------------------------------------------- legacy routes (default instance)
+
+
+@app.get("/status")
+async def legacy_status(x_api_key: str = Header(default="")):
+    return await i_status("default", x_api_key)
+
+
 @app.post("/login")
-async def login(body: LoginBody, x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    phone = normalize_phone(body.phone)
-    current = state.get("phone")
-    session_path = os.path.join(WORK_DIR, SESSION_NAME)
-    if current and current != phone and os.path.exists(session_path):
-        os.remove(session_path)  # switching account: wipe previous session
-    await start_client(phone)
-    try:
-        with open(os.path.join(WORK_DIR, "phone.txt"), "w", encoding="utf-8") as f:
-            f.write(phone)
-    except OSError:
-        pass
-    return {"ok": True, "phone": phone, "stage": state["stage"]}
+async def legacy_login(body: LoginBody, x_api_key: str = Header(default="")):
+    return await i_login("default", body, x_api_key)
 
 
 @app.post("/code")
-async def submit_code(body: CodeBody, x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    if state["stage"] != "awaiting_code":
-        raise HTTPException(status_code=409, detail=f"stage={state['stage']}")
-    await sms_queue.put(body.code.strip())
-    return {"ok": True}
+async def legacy_code(body: CodeBody, x_api_key: str = Header(default="")):
+    return await i_code("default", body, x_api_key)
 
 
 @app.post("/password")
-async def submit_password(body: PasswordBody, x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    if state["stage"] != "awaiting_password":
-        raise HTTPException(status_code=409, detail=f"stage={state['stage']}")
-    await pw_queue.put(body.password)
-    return {"ok": True}
-
-
-@app.post("/reset")
-async def reset(x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    global client_task
-    if client is not None:
-        try:
-            await client.stop()
-        except Exception:  # noqa: BLE001
-            pass
-    if client_task is not None:
-        client_task.cancel()
-        try:
-            await client_task
-        except BaseException:  # noqa: BLE001
-            pass
-    session_path = os.path.join(WORK_DIR, SESSION_NAME)
-    removed = False
-    if os.path.exists(session_path):
-        os.remove(session_path)
-        removed = True
-    state.update(stage="idle", me=None, error=None, connected=False, last_incoming=None)
-    if state.get("phone"):
-        await start_client(state["phone"])
-    return {"ok": True, "session_deleted": removed, "stage": state["stage"]}
+async def legacy_password(body: PasswordBody, x_api_key: str = Header(default="")):
+    return await i_password("default", body, x_api_key)
 
 
 @app.post("/sendText")
-async def send_text(body: SendTextBody, x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    if client is None or state.get("stage") != "authorized":
-        raise HTTPException(status_code=409, detail=f"stage={state['stage']}")
-    chat_id = body.chat_id
-    if chat_id is None:
-        if not body.phone:
-            raise HTTPException(status_code=400, detail="need phone or chat_id")
-        contact = await client.search_by_phone(normalize_phone(body.phone))
-        if contact is None:
-            raise HTTPException(status_code=404, detail="user not found by phone")
-        me_id = None
-        try:
-            me_id = client.me.contact.id
-        except Exception:  # noqa: BLE001
-            pass
-        if me_id is None:
-            raise HTTPException(status_code=500, detail="me unknown")
-        res = client.get_chat_id(first_user_id=me_id, second_user_id=contact.id)
-        if asyncio.iscoroutine(res):
-            res = await res
-        chat_id = res
-    sent = await client.send_message(chat_id=chat_id, text=body.message)
-    mid = getattr(sent, "id", None)
-    return {"ok": True, "chatId": str(chat_id), "messageId": str(mid) if mid is not None else None}
+async def legacy_send_text(body: SendTextBody, x_api_key: str = Header(default="")):
+    return await i_send_text("default", body, x_api_key)
+
+
+@app.post("/reset")
+async def legacy_reset(x_api_key: str = Header(default="")):
+    return await i_reset("default", x_api_key)
 
 
 @app.get("/recent")
-async def get_recent(x_api_key: str = Header(default="")):
-    auth(x_api_key)
-    return {"items": list(recent)}
+async def legacy_recent(x_api_key: str = Header(default="")):
+    return await i_recent("default", x_api_key)

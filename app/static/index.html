@@ -11,104 +11,122 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px 16px 60px; }
-  .wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
-  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
   .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); }
   .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
   .badge.err { background: rgba(255,92,92,.15); color: var(--err); }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .card h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+  .card h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  input { flex: 1; min-width: 160px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 10px 12px; font-size: 15px; }
-  input:focus { outline: none; border-color: var(--accent); }
+  input, select { flex: 1; min-width: 150px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 10px 12px; font-size: 15px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
   button { background: var(--accent); border: none; border-radius: 8px; color: #fff; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
   button:hover { filter: brightness(1.1); }
   button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
   button.danger { background: transparent; border: 1px solid rgba(255,92,92,.4); color: var(--err); }
-  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 12px; font-size: 14px; }
+  .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 12px; font-size: 14px; }
   .kv b { color: var(--muted); font-weight: 500; }
   .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
   .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
   .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-all; }
   .msg .txt { word-break: break-word; }
-  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; display: none; font-size: 14px; }
+  .inst { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
+  .inst:hover { border-color: var(--accent); }
+  .inst.active { border-color: var(--accent); }
+  .inst .nm { font-weight: 600; }
+  .inst .sub { color: var(--muted); font-size: 13px; }
+  code { background: var(--bg); border: 1px solid var(--line); padding: 2px 6px; border-radius: 6px; font-size: 13px; word-break: break-all; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; display: none; font-size: 14px; max-width: 90vw; }
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>MAX Шлюз <span id="stBadge" class="badge warn">…</span></h1>
+  <h1>MAX Шлюз <span id="gBadge" class="badge warn">…</span></h1>
 
   <div class="card" id="keyCard">
     <h2>Подключение</h2>
     <div class="row">
-      <input id="apiKey" placeholder="API-ключ (из файла .env или вывода установщика)" type="password">
-      <button onclick="saveKey()">Сохранить</button>
-    </div>
-    <div class="hint">Ключ задаётся при установке: MAXGW_API_KEY в файле .env.</div>
-  </div>
-
-  <div class="card">
-    <h2>Статус</h2>
-    <div class="kv" id="statusKv"></div>
-  </div>
-
-  <div class="card" id="loginCard">
-    <h2>Вход в аккаунт MAX</h2>
-    <div class="row" style="margin-bottom:8px">
-      <input id="phone" placeholder="Телефон, напр. +79990000000">
-      <button onclick="doLogin()">Запросить код</button>
-    </div>
-    <div class="row hidden" id="codeRow" style="margin-bottom:8px">
-      <input id="code" placeholder="Код из SMS" inputmode="numeric">
-      <button onclick="doCode()">Подтвердить</button>
-    </div>
-    <div class="row hidden" id="pwRow">
-      <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
-      <button onclick="doPw()">Отправить</button>
-    </div>
-    <div class="hint" id="loginHint">Введите номер аккаунта MAX. Код придёт по SMS. Сессия сохраняется, повторный вход не нужен.</div>
-  </div>
-
-  <div class="card">
-    <h2>Тестовая отправка</h2>
-    <div class="row" style="margin-bottom:8px">
-      <input id="toPhone" placeholder="Телефон получателя, напр. +79990000000">
-    </div>
-    <div class="row" style="margin-bottom:8px">
-      <input id="toChat" placeholder="или chat_id (число), если известен">
-    </div>
-    <div class="row">
-      <input id="outText" placeholder="Текст сообщения">
-      <button onclick="doSend()">Отправить</button>
+      <input id="adminKey" placeholder="Админ-ключ (MAXGW_API_KEY из .env)" type="password">
+      <button onclick="saveKey()">Войти</button>
     </div>
   </div>
 
-  <div class="card">
-    <h2>Последние входящие</h2>
-    <div id="recent"></div>
+  <div class="card" id="instCard">
+    <h2>Аккаунты (инстансы)</h2>
+    <div id="instList"></div>
     <div class="row" style="margin-top:10px">
-      <button class="ghost" onclick="loadRecent()">Обновить</button>
-      <button class="danger" onclick="doReset()">Сбросить сессию</button>
+      <input id="newName" placeholder="Имя нового инстанса, напр. salon1" style="min-width:120px">
+      <button onclick="createInst()">Добавить аккаунт</button>
+    </div>
+  </div>
+
+  <div id="panels">
+    <div class="card">
+      <h2>Статус: <span id="curName">—</span></h2>
+      <div class="kv" id="statusKv"></div>
+    </div>
+
+    <div class="card">
+      <h2>Вход в аккаунт MAX</h2>
+      <div class="row" style="margin-bottom:8px">
+        <input id="phone" placeholder="Телефон, напр. +79990000000">
+        <button onclick="doLogin()">Запросить код</button>
+      </div>
+      <div class="row hidden" id="codeRow" style="margin-bottom:8px">
+        <input id="code" placeholder="Код из SMS" inputmode="numeric">
+        <button onclick="doCode()">Подтвердить</button>
+      </div>
+      <div class="row hidden" id="pwRow">
+        <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
+        <button onclick="doPw()">Отправить</button>
+      </div>
+      <div class="hint">Сессия сохраняется, повторный вход не нужен.</div>
+    </div>
+
+    <div class="card">
+      <h2>Тестовая отправка</h2>
+      <div class="row" style="margin-bottom:8px">
+        <input id="toPhone" placeholder="Телефон получателя, напр. +79990000000">
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <input id="toChat" placeholder="или chat_id (число), если известен">
+      </div>
+      <div class="row">
+        <input id="outText" placeholder="Текст сообщения">
+        <button onclick="doSend()">Отправить</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Последние входящие</h2>
+      <div id="recent"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" onclick="loadRecent()">Обновить</button>
+        <button class="danger" onclick="doReset()">Сбросить сессию</button>
+      </div>
     </div>
   </div>
 </div>
 <div id="toast"></div>
 
 <script>
-const LS_KEY = 'maxgw_key';
-let KEY = localStorage.getItem(LS_KEY) || '';
+const LS_ADMIN = 'maxgw_admin';
+const LS_CUR = 'maxgw_cur';
+let KEY = localStorage.getItem(LS_ADMIN) || '';
+let CUR = localStorage.getItem(LS_CUR) || '';
 
-function toast(t, ms=2500) {
+function toast(t, ms=3000) {
   const el = document.getElementById('toast');
   el.textContent = t; el.style.display = 'block';
   setTimeout(() => el.style.display = 'none', ms);
 }
 function saveKey() {
-  KEY = document.getElementById('apiKey').value.trim();
-  localStorage.setItem(LS_KEY, KEY);
-  refresh(); toast('Ключ сохранён');
+  KEY = document.getElementById('adminKey').value.trim();
+  localStorage.setItem(LS_ADMIN, KEY);
+  loadOverview();
 }
 async function api(path, method='GET', body=null) {
   const r = await fetch(path, {
@@ -117,31 +135,72 @@ async function api(path, method='GET', body=null) {
     body: body ? JSON.stringify(body) : null,
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail || r.status);
+  if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
   return j;
 }
-function badge(stage, connected) {
-  const b = document.getElementById('stBadge');
-  if (stage === 'authorized' && connected) { b.textContent = 'подключено'; b.className = 'badge ok'; }
-  else if (stage === 'awaiting_code') { b.textContent = 'нужен код'; b.className = 'badge warn'; }
-  else if (stage === 'awaiting_password') { b.textContent = 'нужен 2FA'; b.className = 'badge warn'; }
-  else if (stage === 'error') { b.textContent = 'ошибка'; b.className = 'badge err'; }
-  else { b.textContent = stage; b.className = 'badge warn'; }
+function badgeFor(el, stage, connected) {
+  if (stage === 'authorized' && connected) { el.textContent = 'подключено'; el.className = 'badge ok'; }
+  else if (stage === 'awaiting_code') { el.textContent = 'нужен код'; el.className = 'badge warn'; }
+  else if (stage === 'awaiting_password') { el.textContent = 'нужен 2FA'; el.className = 'badge warn'; }
+  else if (stage === 'error') { el.textContent = 'ошибка'; el.className = 'badge err'; }
+  else { el.textContent = stage || '—'; el.className = 'badge warn'; }
+}
+async function loadOverview() {
+  try {
+    const r = await api('/admin/overview');
+    document.getElementById('keyCard').classList.add('hidden');
+    document.getElementById('instCard').classList.remove('hidden');
+    document.getElementById('panels').classList.remove('hidden');
+    if (!r.instances.length) CUR = '';
+    if (!CUR && r.instances.length) CUR = r.instances[0].name;
+    if (!r.instances.some(i => i.name === CUR)) CUR = r.instances[0]?.name || '';
+    localStorage.setItem(LS_CUR, CUR);
+    const list = document.getElementById('instList'); list.innerHTML = '';
+    for (const i of r.instances) {
+      const d = document.createElement('div');
+      d.className = 'inst' + (i.name === CUR ? ' active' : '');
+      const l = document.createElement('div');
+      l.innerHTML = `<div class="nm">${i.name}</div><div class="sub">${i.phone || 'без телефона'} · ${i.stage}</div>`;
+      const b = document.createElement('span');
+      badgeFor(b, i.stage, i.connected);
+      d.append(l, b);
+      d.onclick = () => { CUR = i.name; localStorage.setItem(LS_CUR, CUR); loadOverview(); refresh(); loadRecent(); };
+      list.append(d);
+    }
+    if (CUR) refresh();
+  } catch (e) {
+    if (String(e.message).includes('401') || String(e.message).includes('key')) {
+      document.getElementById('keyCard').classList.remove('hidden');
+      document.getElementById('instCard').classList.add('hidden');
+      document.getElementById('panels').classList.add('hidden');
+      document.getElementById('gBadge').textContent = 'нужен ключ';
+    }
+  }
+}
+async function createInst() {
+  const name = document.getElementById('newName').value.trim().toLowerCase();
+  if (!name) return toast('Введите имя инстанса');
+  try {
+    const r = await api('/admin/instances', 'POST', { name });
+    CUR = name; localStorage.setItem(LS_CUR, CUR);
+    toast('Создан инстанс ' + name + '. Ключ: ' + r.api_key, 8000);
+    document.getElementById('newName').value = '';
+    loadOverview(); loadRecent();
+  } catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function refresh() {
+  if (!CUR) return;
   try {
-    const s = await api('/status');
-    badge(s.stage, s.connected);
-    document.getElementById('keyCard').classList.add('hidden');
-    const kv = document.getElementById('statusKv');
-    kv.innerHTML = '';
+    const s = await api(`/i/${CUR}/status`);
+    badgeFor(document.getElementById('gBadge'), s.stage, s.connected);
+    document.getElementById('curName').textContent = CUR;
+    const kv = document.getElementById('statusKv'); kv.innerHTML = '';
     const rows = [
       ['Состояние', s.stage], ['Телефон', s.phone || '—'],
       ['User ID', s.me || '—'], ['Соединение', s.connected ? 'онлайн' : 'офлайн'],
-      ['Вебхук n8n', s.webhook_url_set ? 'настроен' : 'не настроен'],
+      ['Вебхук', s.webhook_url_set ? 'настроен' : 'не настроен'],
     ];
     if (s.error) rows.push(['Ошибка', s.error]);
-    if (s.last_webhook) rows.push(['Доставка вебхука', JSON.stringify(s.last_webhook)]);
     for (const [k, v] of rows) {
       const b = document.createElement('b'); b.textContent = k;
       const d = document.createElement('div'); d.textContent = String(v);
@@ -149,24 +208,19 @@ async function refresh() {
     }
     document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code');
     document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
-  } catch (e) {
-    if (String(e.message).includes('401')) {
-      document.getElementById('keyCard').classList.remove('hidden');
-      badge('error', false); document.getElementById('stBadge').textContent = 'нет ключа';
-    }
-  }
+  } catch (e) { console.error(e); }
 }
 async function doLogin() {
-  try { const r = await api('/login', 'POST', { phone: document.getElementById('phone').value });
+  try { const r = await api(`/i/${CUR}/login`, 'POST', { phone: document.getElementById('phone').value });
         toast('Код запрошен: ' + r.phone); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function doCode() {
-  try { await api('/code', 'POST', { code: document.getElementById('code').value }); toast('Код отправлен'); refresh(); }
+  try { await api(`/i/${CUR}/code`, 'POST', { code: document.getElementById('code').value }); toast('Код отправлен'); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function doPw() {
-  try { await api('/password', 'POST', { password: document.getElementById('pw').value }); toast('Пароль отправлен'); refresh(); }
+  try { await api(`/i/${CUR}/password`, 'POST', { password: document.getElementById('pw').value }); toast('Пароль отправлен'); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function doSend() {
@@ -174,17 +228,18 @@ async function doSend() {
   const chat = document.getElementById('toChat').value.trim();
   const phone = document.getElementById('toPhone').value.trim();
   if (chat) body.chat_id = parseInt(chat, 10); else body.phone = phone;
-  try { const r = await api('/sendText', 'POST', body); toast('Отправлено, id ' + r.messageId); }
+  try { const r = await api(`/i/${CUR}/sendText`, 'POST', body); toast('Отправлено, id ' + r.messageId); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function doReset() {
-  if (!confirm('Сбросить сессию? Потребуется новый вход по SMS.')) return;
-  try { await api('/reset', 'POST'); toast('Сессия сброшена, запрос кода…'); refresh(); }
+  if (!confirm('Сбросить сессию инстанса ' + CUR + '? Потребуется новый вход по SMS.')) return;
+  try { await api(`/i/${CUR}/reset`, 'POST'); toast('Сессия сброшена'); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function loadRecent() {
+  if (!CUR) return;
   try {
-    const r = await api('/recent');
+    const r = await api(`/i/${CUR}/recent`);
     const box = document.getElementById('recent'); box.innerHTML = '';
     if (!r.items.length) { box.innerHTML = '<div class="hint">Пока пусто.</div>'; return; }
     for (const it of [...r.items].reverse()) {
@@ -195,14 +250,21 @@ async function loadRecent() {
       const sender = p.senderData.senderName || p.senderData.senderId || '?';
       meta.textContent = `${ts} · ${sender} · chat ${p.senderData.chatId}`;
       const txt = document.createElement('div'); txt.className = 'txt';
-      txt.textContent = p.messageData.textMessageData?.textMessage || JSON.stringify(p.messageData);
+      const t = p.messageData.textMessageData?.textMessage;
+      if (t) txt.textContent = t;
+      else if (p.messageData.voiceMessageData) {
+        const v = p.messageData.voiceMessageData;
+        txt.textContent = '🎙 голосовое ' + (v.duration ? v.duration + 'с' : '') +
+          (v.transcript ? '\n«' + v.transcript + '»' : ' (без расшифровки)');
+      } else txt.textContent = JSON.stringify(p.messageData);
+      txt.style.whiteSpace = 'pre-wrap';
       d.append(meta, txt); box.append(d);
     }
   } catch (e) { console.error(e); }
 }
-if (KEY) document.getElementById('apiKey').value = KEY;
-refresh(); loadRecent();
-setInterval(refresh, 4000); setInterval(loadRecent, 15000);
+if (KEY) document.getElementById('adminKey').value = KEY;
+loadOverview(); loadRecent();
+setInterval(loadOverview, 8000); setInterval(loadRecent, 15000);
 </script>
 </body>
 </html>
