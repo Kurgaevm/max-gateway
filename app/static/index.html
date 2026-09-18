@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAX Шлюз</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e9ef;
+    --muted: #8b93a3; --accent: #4f8cff; --ok: #3ecf8e; --warn: #f5a623; --err: #ff5c5c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px 16px 60px; }
+  .wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+  .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); }
+  .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .badge.err { background: rgba(255,92,92,.15); color: var(--err); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1; min-width: 160px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 10px 12px; font-size: 15px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  button { background: var(--accent); border: none; border-radius: 8px; color: #fff; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  button.danger { background: transparent; border: 1px solid rgba(255,92,92,.4); color: var(--err); }
+  .kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 12px; font-size: 14px; }
+  .kv b { color: var(--muted); font-weight: 500; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
+  .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-all; }
+  .msg .txt { word-break: break-word; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; display: none; font-size: 14px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MAX Шлюз <span id="stBadge" class="badge warn">…</span></h1>
+
+  <div class="card" id="keyCard">
+    <h2>Подключение</h2>
+    <div class="row">
+      <input id="apiKey" placeholder="API-ключ (из файла .env или вывода установщика)" type="password">
+      <button onclick="saveKey()">Сохранить</button>
+    </div>
+    <div class="hint">Ключ задаётся при установке: MAXGW_API_KEY в файле .env.</div>
+  </div>
+
+  <div class="card">
+    <h2>Статус</h2>
+    <div class="kv" id="statusKv"></div>
+  </div>
+
+  <div class="card" id="loginCard">
+    <h2>Вход в аккаунт MAX</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input id="phone" placeholder="Телефон, напр. +79990000000">
+      <button onclick="doLogin()">Запросить код</button>
+    </div>
+    <div class="row hidden" id="codeRow" style="margin-bottom:8px">
+      <input id="code" placeholder="Код из SMS" inputmode="numeric">
+      <button onclick="doCode()">Подтвердить</button>
+    </div>
+    <div class="row hidden" id="pwRow">
+      <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
+      <button onclick="doPw()">Отправить</button>
+    </div>
+    <div class="hint" id="loginHint">Введите номер аккаунта MAX. Код придёт по SMS. Сессия сохраняется, повторный вход не нужен.</div>
+  </div>
+
+  <div class="card">
+    <h2>Тестовая отправка</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input id="toPhone" placeholder="Телефон получателя, напр. +79990000000">
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="toChat" placeholder="или chat_id (число), если известен">
+    </div>
+    <div class="row">
+      <input id="outText" placeholder="Текст сообщения">
+      <button onclick="doSend()">Отправить</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Последние входящие</h2>
+    <div id="recent"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="loadRecent()">Обновить</button>
+      <button class="danger" onclick="doReset()">Сбросить сессию</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const LS_KEY = 'maxgw_key';
+let KEY = localStorage.getItem(LS_KEY) || '';
+
+function toast(t, ms=2500) {
+  const el = document.getElementById('toast');
+  el.textContent = t; el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', ms);
+}
+function saveKey() {
+  KEY = document.getElementById('apiKey').value.trim();
+  localStorage.setItem(LS_KEY, KEY);
+  refresh(); toast('Ключ сохранён');
+}
+async function api(path, method='GET', body=null) {
+  const r = await fetch(path, {
+    method,
+    headers: { 'X-Api-Key': KEY, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : null,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.status);
+  return j;
+}
+function badge(stage, connected) {
+  const b = document.getElementById('stBadge');
+  if (stage === 'authorized' && connected) { b.textContent = 'подключено'; b.className = 'badge ok'; }
+  else if (stage === 'awaiting_code') { b.textContent = 'нужен код'; b.className = 'badge warn'; }
+  else if (stage === 'awaiting_password') { b.textContent = 'нужен 2FA'; b.className = 'badge warn'; }
+  else if (stage === 'error') { b.textContent = 'ошибка'; b.className = 'badge err'; }
+  else { b.textContent = stage; b.className = 'badge warn'; }
+}
+async function refresh() {
+  try {
+    const s = await api('/status');
+    badge(s.stage, s.connected);
+    document.getElementById('keyCard').classList.add('hidden');
+    const kv = document.getElementById('statusKv');
+    kv.innerHTML = '';
+    const rows = [
+      ['Состояние', s.stage], ['Телефон', s.phone || '—'],
+      ['User ID', s.me || '—'], ['Соединение', s.connected ? 'онлайн' : 'офлайн'],
+      ['Вебхук n8n', s.webhook_url_set ? 'настроен' : 'не настроен'],
+    ];
+    if (s.error) rows.push(['Ошибка', s.error]);
+    if (s.last_webhook) rows.push(['Доставка вебхука', JSON.stringify(s.last_webhook)]);
+    for (const [k, v] of rows) {
+      const b = document.createElement('b'); b.textContent = k;
+      const d = document.createElement('div'); d.textContent = String(v);
+      kv.append(b, d);
+    }
+    document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code');
+    document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
+  } catch (e) {
+    if (String(e.message).includes('401')) {
+      document.getElementById('keyCard').classList.remove('hidden');
+      badge('error', false); document.getElementById('stBadge').textContent = 'нет ключа';
+    }
+  }
+}
+async function doLogin() {
+  try { const r = await api('/login', 'POST', { phone: document.getElementById('phone').value });
+        toast('Код запрошен: ' + r.phone); refresh(); }
+  catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function doCode() {
+  try { await api('/code', 'POST', { code: document.getElementById('code').value }); toast('Код отправлен'); refresh(); }
+  catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function doPw() {
+  try { await api('/password', 'POST', { password: document.getElementById('pw').value }); toast('Пароль отправлен'); refresh(); }
+  catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function doSend() {
+  const body = { message: document.getElementById('outText').value };
+  const chat = document.getElementById('toChat').value.trim();
+  const phone = document.getElementById('toPhone').value.trim();
+  if (chat) body.chat_id = parseInt(chat, 10); else body.phone = phone;
+  try { const r = await api('/sendText', 'POST', body); toast('Отправлено, id ' + r.messageId); }
+  catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function doReset() {
+  if (!confirm('Сбросить сессию? Потребуется новый вход по SMS.')) return;
+  try { await api('/reset', 'POST'); toast('Сессия сброшена, запрос кода…'); refresh(); }
+  catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function loadRecent() {
+  try {
+    const r = await api('/recent');
+    const box = document.getElementById('recent'); box.innerHTML = '';
+    if (!r.items.length) { box.innerHTML = '<div class="hint">Пока пусто.</div>'; return; }
+    for (const it of [...r.items].reverse()) {
+      const p = it.payload;
+      const d = document.createElement('div'); d.className = 'msg';
+      const meta = document.createElement('div'); meta.className = 'meta';
+      const ts = new Date(it.ts * 1000).toLocaleString('ru-RU');
+      const sender = p.senderData.senderName || p.senderData.senderId || '?';
+      meta.textContent = `${ts} · ${sender} · chat ${p.senderData.chatId}`;
+      const txt = document.createElement('div'); txt.className = 'txt';
+      txt.textContent = p.messageData.textMessageData?.textMessage || JSON.stringify(p.messageData);
+      d.append(meta, txt); box.append(d);
+    }
+  } catch (e) { console.error(e); }
+}
+if (KEY) document.getElementById('apiKey').value = KEY;
+refresh(); loadRecent();
+setInterval(refresh, 4000); setInterval(loadRecent, 15000);
+</script>
+</body>
+</html>

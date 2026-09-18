@@ -1,0 +1,19 @@
+services:
+  maxgateway:
+    build: .
+    container_name: maxgateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./data:/data
+    environment:
+      GATEWAY_API_KEY: ${MAXGW_API_KEY}
+      WEBHOOK_URL: ${MAXGW_WEBHOOK_URL:-}
+      PHONE: ${MAXGW_PHONE:-}
+      REG_FIRST_NAME: ${MAXGW_REG_FIRST:-Maomao}
+      REG_LAST_NAME: ${MAXGW_REG_LAST:-Test}
+      WORK_DIR: /data
+      SESSION_NAME: maxgw.db
+      LOG_LEVEL: INFO
+      PYMAX_LOG_LEVEL: INFO
