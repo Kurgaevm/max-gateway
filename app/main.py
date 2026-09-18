@@ -236,22 +236,25 @@ def attach_type(a: Any) -> str:
     return str(getattr(t, "value", t))
 
 
-def sender_display_name(c: Client, user_id: Any) -> Optional[str]:
+def sender_info(c: Client, user_id: Any) -> tuple[Optional[str], Optional[str]]:
+    """(display name, phone) from the cached user, if the API returned them."""
     if user_id is None:
-        return None
+        return None, None
     try:
         u = c.get_cached_user(int(user_id))
     except Exception:  # noqa: BLE001
-        return None
+        return None, None
     if u is None:
-        return None
+        return None, None
     parts = []
     for n in list(getattr(u, "names", None) or [])[:1]:
         for attr in ("first_name", "last_name"):
             v = getattr(n, attr, None)
             if isinstance(v, str) and v:
                 parts.append(v)
-    return " ".join(parts) or None
+    name = " ".join(parts) or None
+    ph = getattr(u, "phone", None)
+    return name, (f"+{ph}" if ph else None)
 
 
 async def transcribe(data: bytes, mime: str = "audio/ogg") -> Optional[str]:
@@ -353,6 +356,7 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
             "attaches": [{"type": attach_type(a)} for a in attaches],
         }
 
+    sname, sphone = sender_info(c, sid)
     payload = {
         "typeWebhook": "incomingMessageReceived",
         "instanceData": {
@@ -367,7 +371,8 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
             "chatId": str(api_chat_id) if api_chat_id is not None else None,
             "rawChatId": str(chat_id) if chat_id is not None else None,
             "senderId": str(sid) if sid is not None else None,
-            "senderName": sender_display_name(c, sid),
+            "senderName": sname,
+            "senderPhoneNumber": sphone,
         },
         "messageData": message_data,
     }
