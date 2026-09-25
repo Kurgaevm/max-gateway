@@ -30,6 +30,12 @@
   .kv b { color: var(--muted); font-weight: 500; }
   .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
   .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
+  .cl-row { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+  .cl-row:hover { border-color: var(--accent); }
+  .cl-nm { font-weight: 600; font-size: 14px; }
+  .cl-txt { color: var(--muted); font-size: 13px; margin-top: 2px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cl-r { text-align: right; flex: none; font-size: 13px; }
+  .cl-cnt { color: var(--muted); font-size: 12px; }
   .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-all; }
   .msg .txt { word-break: break-word; }
   .inst { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
@@ -98,6 +104,12 @@
         <input id="outText" placeholder="Текст сообщения">
         <button onclick="doSend()">Отправить</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Клиенты <span id="clCount" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="clients"></div>
+      <div class="hint">Переписка сгруппирована по чатам: кто писал, когда и о чём. Обновляется вместе с входящими.</div>
     </div>
 
     <div class="card">
@@ -260,7 +272,52 @@ async function loadRecent() {
       txt.style.whiteSpace = 'pre-wrap';
       d.append(meta, txt); box.append(d);
     }
+    renderClients(r.items);
   } catch (e) { console.error(e); }
+}
+function textPreview(p) {
+  const md = p && p.messageData || {};
+  if (md.textMessageData && md.textMessageData.textMessage) return md.textMessageData.textMessage;
+  if (md.voiceMessageData) {
+    const v = md.voiceMessageData;
+    return '🎙 голосовое' + (v.duration ? ' ' + v.duration + 'с' : '') + (v.transcript ? ': ' + v.transcript : '');
+  }
+  if (md.extendedTextMessageData && md.extendedTextMessageData.text) return md.extendedTextMessageData.text;
+  return '';
+}
+function renderClients(items) {
+  const box = document.getElementById('clients'); if (!box) return;
+  const cnt = document.getElementById('clCount');
+  const byChat = {};
+  for (const it of items) {
+    const p = it.payload || {};
+    const sd = p.senderData || {};
+    const chat = String(sd.chatId ?? '—');
+    if (!byChat[chat]) byChat[chat] = { name: '', chatId: chat, count: 0, lastTs: 0, lastText: '' };
+    const c = byChat[chat];
+    if (sd.senderName) c.name = sd.senderName;
+    c.count++;
+    if (it.ts >= c.lastTs) { c.lastTs = it.ts; const t = textPreview(p); if (t) c.lastText = t; }
+  }
+  const clients = Object.values(byChat).sort((a, b) => b.lastTs - a.lastTs);
+  if (cnt) cnt.textContent = clients.length ? '· ' + clients.length : '';
+  box.innerHTML = '';
+  if (!clients.length) { box.innerHTML = '<div class="hint">Пока никто не писал.</div>'; return; }
+  for (const c of clients) {
+    const d = document.createElement('div'); d.className = 'cl-row';
+    const l = document.createElement('div');
+    const nm = document.createElement('div'); nm.className = 'cl-nm'; nm.textContent = c.name || ('chat ' + c.chatId);
+    const tx = document.createElement('div'); tx.className = 'cl-txt'; tx.textContent = c.lastText || '(без текста)';
+    l.append(nm, tx);
+    const r = document.createElement('div'); r.className = 'cl-r';
+    const ts = document.createElement('div');
+    ts.textContent = c.lastTs ? new Date(c.lastTs * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+    const cc = document.createElement('div'); cc.className = 'cl-cnt'; cc.textContent = c.count + ' сообщ.';
+    r.append(ts, cc);
+    d.append(l, r);
+    d.title = 'chat_id: ' + c.chatId;
+    box.append(d);
+  }
 }
 if (KEY) document.getElementById('adminKey').value = KEY;
 loadOverview(); loadRecent();
