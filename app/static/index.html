@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAX Шлюз</title>
+<title>Шлюз MAX + Telegram</title>
 <style>
   :root {
     --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e9ef;
@@ -36,7 +36,7 @@
   .cl-txt { color: var(--muted); font-size: 13px; margin-top: 2px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .cl-r { text-align: right; flex: none; font-size: 13px; }
   .cl-cnt { color: var(--muted); font-size: 12px; }
-  .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-all; }
+  .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-word; }
   .msg .txt { word-break: break-word; }
   .inst { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
   .inst:hover { border-color: var(--accent); }
@@ -50,7 +50,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>MAX Шлюз <span id="gBadge" class="badge warn">…</span></h1>
+  <h1>Шлюз MAX + Telegram <span id="gBadge" class="badge warn">…</span></h1>
 
   <div class="card" id="keyCard">
     <h2>Подключение</h2>
@@ -65,6 +65,10 @@
     <div id="instList"></div>
     <div class="row" style="margin-top:10px">
       <input id="newName" placeholder="Имя нового инстанса, напр. salon1" style="min-width:120px">
+      <select id="newType" style="min-width:120px">
+        <option value="max">MAX</option>
+        <option value="telegram">Telegram</option>
+      </select>
       <button onclick="createInst()">Добавить аккаунт</button>
     </div>
   </div>
@@ -76,20 +80,26 @@
     </div>
 
     <div class="card">
-      <h2>Вход в аккаунт MAX</h2>
+      <h2>Вход в аккаунт</h2>
       <div class="row" style="margin-bottom:8px">
         <input id="phone" placeholder="Телефон, напр. +79990000000">
         <button onclick="doLogin()">Запросить код</button>
       </div>
       <div class="row hidden" id="codeRow" style="margin-bottom:8px">
-        <input id="code" placeholder="Код из SMS" inputmode="numeric">
+        <input id="code" placeholder="Код из SMS или Telegram" inputmode="numeric">
         <button onclick="doCode()">Подтвердить</button>
       </div>
       <div class="row hidden" id="pwRow">
         <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
         <button onclick="doPw()">Отправить</button>
       </div>
-      <div class="hint">Сессия сохраняется, повторный вход не нужен.</div>
+      <div class="row hidden" id="qrRow" style="margin-bottom:8px">
+        <img id="qrImg" alt="QR" style="background:#fff;padding:8px;border-radius:8px;height:230px;width:230px">
+      </div>
+      <div class="row">
+        <button class="ghost" onclick="startQr()">Вход по QR (Telegram)</button>
+      </div>
+      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. Сессия сохраняется, повторный вход не нужен.</div>
     </div>
 
     <div class="card">
@@ -154,6 +164,7 @@ function badgeFor(el, stage, connected) {
   if (stage === 'authorized' && connected) { el.textContent = 'подключено'; el.className = 'badge ok'; }
   else if (stage === 'awaiting_code') { el.textContent = 'нужен код'; el.className = 'badge warn'; }
   else if (stage === 'awaiting_password') { el.textContent = 'нужен 2FA'; el.className = 'badge warn'; }
+  else if (stage === 'awaiting_qr') { el.textContent = 'ждёт QR'; el.className = 'badge warn'; }
   else if (stage === 'error') { el.textContent = 'ошибка'; el.className = 'badge err'; }
   else { el.textContent = stage || '—'; el.className = 'badge warn'; }
 }
@@ -172,7 +183,8 @@ async function loadOverview() {
       const d = document.createElement('div');
       d.className = 'inst' + (i.name === CUR ? ' active' : '');
       const l = document.createElement('div');
-      l.innerHTML = `<div class="nm">${i.name}</div><div class="sub">${i.phone || 'без телефона'} · ${i.stage}</div>`;
+      const kind = i.type === 'telegram' ? 'Telegram' : 'MAX';
+      l.innerHTML = `<div class="nm">${i.name}</div><div class="sub">${i.phone || 'без телефона'} · ${kind} · ${i.stage}</div>`;
       const b = document.createElement('span');
       badgeFor(b, i.stage, i.connected);
       d.append(l, b);
@@ -192,10 +204,11 @@ async function loadOverview() {
 async function createInst() {
   const name = document.getElementById('newName').value.trim().toLowerCase();
   if (!name) return toast('Введите имя инстанса');
+  const type = document.getElementById('newType').value;
   try {
-    const r = await api('/admin/instances', 'POST', { name });
+    const r = await api('/admin/instances', 'POST', { name, type });
     CUR = name; localStorage.setItem(LS_CUR, CUR);
-    toast('Создан инстанс ' + name + '. Ключ: ' + r.api_key, 8000);
+    toast('Создан инстанс ' + name + ' (' + type + '). Ключ: ' + r.api_key, 8000);
     document.getElementById('newName').value = '';
     loadOverview(); loadRecent();
   } catch (e) { toast('Ошибка: ' + e.message); }
@@ -208,6 +221,7 @@ async function refresh() {
     document.getElementById('curName').textContent = CUR;
     const kv = document.getElementById('statusKv'); kv.innerHTML = '';
     const rows = [
+      ['Тип', s.type === 'telegram' ? 'Telegram' : 'MAX'],
       ['Состояние', s.stage], ['Телефон', s.phone || '—'],
       ['User ID', s.me || '—'], ['Соединение', s.connected ? 'онлайн' : 'офлайн'],
       ['Вебхук', s.webhook_url_set ? 'настроен' : 'не настроен'],
@@ -220,6 +234,8 @@ async function refresh() {
     }
     document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code');
     document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
+    document.getElementById('qrRow').classList.toggle('hidden', s.stage !== 'awaiting_qr');
+    if (s.stage === 'awaiting_qr') updateQrImg();
   } catch (e) { console.error(e); }
 }
 async function doLogin() {
@@ -235,6 +251,23 @@ async function doPw() {
   try { await api(`/i/${CUR}/password`, 'POST', { password: document.getElementById('pw').value }); toast('Пароль отправлен'); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
+async function startQr() {
+  try {
+    const r = await api(`/i/${CUR}/qr`, 'POST');
+    if (r.stage === 'authorized') { toast('Уже авторизован'); refresh(); return; }
+    toast('Отсканируйте QR: Telegram -> Настройки -> Устройства -> Подключить устройство', 6000);
+    updateQrImg(); refresh();
+  } catch (e) { toast('Ошибка: ' + e.message); }
+}
+async function updateQrImg() {
+  try {
+    const r = await fetch(`/i/${CUR}/qr.png`, { headers: { 'X-Api-Key': KEY } });
+    if (!r.ok) return;
+    const b = await r.blob();
+    document.getElementById('qrImg').src = URL.createObjectURL(b);
+    document.getElementById('qrRow').classList.remove('hidden');
+  } catch (e) { /* тихо */ }
+}
 async function doSend() {
   const body = { message: document.getElementById('outText').value };
   const chat = document.getElementById('toChat').value.trim();
@@ -244,7 +277,7 @@ async function doSend() {
   catch (e) { toast('Ошибка: ' + e.message); }
 }
 async function doReset() {
-  if (!confirm('Сбросить сессию инстанса ' + CUR + '? Потребуется новый вход по SMS.')) return;
+  if (!confirm('Сбросить сессию инстанса ' + CUR + '? Потребуется новый вход.')) return;
   try { await api(`/i/${CUR}/reset`, 'POST'); toast('Сессия сброшена'); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
