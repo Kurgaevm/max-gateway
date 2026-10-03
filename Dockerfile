@@ -6,7 +6,9 @@ RUN pip install --no-cache-dir \
     "maxapi-python>=2.2,<3" \
     fastapi \
     uvicorn \
-    httpx
+    httpx \
+    "telethon>=1.36,<2" \
+    qrcode
 
 COPY app /app
 

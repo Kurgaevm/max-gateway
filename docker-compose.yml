@@ -16,6 +16,8 @@ services:
       STT_MODEL: ${STT_MODEL:-whisper-1}
       REG_FIRST_NAME: ${MAXGW_REG_FIRST:-Maomao}
       REG_LAST_NAME: ${MAXGW_REG_LAST:-Test}
+      TG_API_ID: ${TG_API_ID:-}
+      TG_API_HASH: ${TG_API_HASH:-}
       WORK_DIR: /data
       SESSION_NAME: maxgw.db
       LOG_LEVEL: INFO
