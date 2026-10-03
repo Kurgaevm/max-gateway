@@ -6,6 +6,7 @@ FastAPI + PyMax (неофициальный внутренний API MAX).
 - Входящие сообщения -> вебхук на URL инстанса (формат совместим с Green-API)
 - Голосовые сообщения: скачивание + расшифровка через OpenAI-совместимый STT
 - Исходящие: POST /i/{name}/sendText
+- Инстансы Telegram (Telethon): тот же API, вход по коду из Telegram или QR
 """
 
 import asyncio
@@ -23,7 +24,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from pymax import Client, ExtraConfig, RegistrationConfig
@@ -33,6 +34,16 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger("maxgw")
+
+# Telegram-адаптер (telethon). Если библиотеки нет — шлюз работает только с MAX.
+TG = None
+try:
+    try:
+        import tg as TG  # запуск из каталога app (docker: uvicorn main:app)
+    except ImportError:
+        from app import tg as TG  # запуск из корня репозитория
+except Exception as _tg_err:  # noqa: BLE001
+    log.warning("Telegram adapter unavailable: %s", _tg_err)
 
 API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
 GLOBAL_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
@@ -55,8 +66,9 @@ STT_MODEL = os.environ.get("STT_MODEL", "whisper-1")
 class Inst:
     def __init__(self, name: str, phone: Optional[str] = None,
                  api_key: Optional[str] = None, webhook_url: str = "",
-                 created: Optional[float] = None) -> None:
+                 created: Optional[float] = None, type: str = "max") -> None:
         self.name = name
+        self.type = type  # max | telegram
         self.phone = phone
         self.api_key = api_key or secrets.token_hex(24)
         self.webhook_url = webhook_url or ""
@@ -77,13 +89,31 @@ class Inst:
         self.pw_queue: asyncio.Queue = asyncio.Queue()
         self.client: Optional[Client] = None
         self.task: Optional[asyncio.Task] = None
+        # telegram runtime
+        self.tg_code_hash: Optional[str] = None
+        self.qr_task: Optional[asyncio.Task] = None
+        self.qr_url: Optional[str] = None
+
+    def _live_connected(self) -> bool:
+        if self.client is None:
+            return False
+        f = getattr(self.client, "is_connected", None)
+        if f is None:
+            return False
+        if callable(f):
+            try:
+                return bool(f())
+            except Exception:  # noqa: BLE001
+                return False
+        return bool(f)
 
     def summary(self) -> dict:
         return {
             "name": self.name,
+            "type": self.type,
             "phone": self.phone,
             "stage": self.stage,
-            "connected": self.connected,
+            "connected": self._live_connected(),
             "me": self.me,
             "webhook_url": self.webhook_url or GLOBAL_WEBHOOK_URL or None,
         }
@@ -91,12 +121,14 @@ class Inst:
     def status(self) -> dict:
         return {
             "instance": self.name,
+            "type": self.type,
             "stage": self.stage,
             "phone": self.phone,
             "me": self.me,
             "hint": self.hint,
             "error": self.error,
-            "connected": bool(self.client is not None and getattr(self.client, "is_connected", False)),
+            "connected": self._live_connected(),
+            "qr_url": self.qr_url,
             "last_incoming": self.last_incoming,
             "last_webhook": self.last_webhook,
         }
@@ -110,6 +142,7 @@ def save_instances() -> None:
         "instances": [
             {
                 "name": i.name,
+                "type": i.type,
                 "phone": i.phone,
                 "api_key": i.api_key,
                 "webhook_url": i.webhook_url,
@@ -363,7 +396,7 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
             "idInstance": 1,
             "instanceName": inst.name,
             "wid": inst.phone,
-            "typeInstance": "max",
+            "typeInstance": inst.type,
         },
         "timestamp": int(time.time()),
         "idMessage": str(mid) if mid is not None else uuid.uuid4().hex,
@@ -423,6 +456,10 @@ def attach_handlers(inst: Inst, c: Client) -> None:
 
 
 async def start_client(inst: Inst) -> None:
+    if inst.type == "telegram":
+        require_tg()
+        await TG.start_client(inst)
+        return
     if inst.task is not None and not inst.task.done():
         if inst.client is not None:
             try:
@@ -456,6 +493,10 @@ async def start_client(inst: Inst) -> None:
 
 
 async def stop_client(inst: Inst) -> None:
+    if inst.type == "telegram":
+        if TG is not None:
+            await TG.stop_client(inst)
+        return
     if inst.client is not None:
         try:
             await inst.client.stop()
@@ -476,11 +517,23 @@ async def stop_client(inst: Inst) -> None:
 async def lifespan(app: FastAPI):
     load_instances()
     for inst in list(INSTANCES.values()):
-        if inst.phone:
-            await start_client(inst)
+        has_session = inst.phone or (
+            inst.type == "telegram"
+            and os.path.exists(os.path.join(SESSIONS_DIR, inst.name + ".session"))
+        )
+        if has_session:
+            try:
+                await start_client(inst)
+            except Exception as e:  # noqa: BLE001
+                inst.stage = "error"
+                inst.error = str(e)
+                log.warning("start %s failed: %s", inst.name, e)
     yield
     for inst in list(INSTANCES.values()):
-        await stop_client(inst)
+        try:
+            await stop_client(inst)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stop %s failed: %s", inst.name, e)
 
 
 app = FastAPI(title="max-gateway", lifespan=lifespan)
@@ -514,6 +567,14 @@ def require_inst(x_api_key: str, inst: Inst) -> None:
         raise HTTPException(status_code=401, detail="bad api key")
 
 
+def require_tg() -> None:
+    if TG is None:
+        raise HTTPException(
+            status_code=503,
+            detail="telegram adapter unavailable (установите telethon)",
+        )
+
+
 # ---------------------------------------------------------------- models
 
 
@@ -539,6 +600,7 @@ class CreateInstBody(BaseModel):
     name: str
     webhook_url: str = ""
     phone: str = ""
+    type: str = "max"
 
 
 class WebhookBody(BaseModel):
@@ -549,6 +611,9 @@ class WebhookBody(BaseModel):
 
 
 async def act_login(inst: Inst, phone_raw: str) -> dict:
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_login(inst, phone_raw)
     phone = normalize_phone(phone_raw)
     old_session = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
     if inst.phone and inst.phone != phone and os.path.exists(old_session):
@@ -560,6 +625,9 @@ async def act_login(inst: Inst, phone_raw: str) -> dict:
 
 
 async def act_code(inst: Inst, code: str) -> dict:
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_code(inst, code)
     if inst.stage != "awaiting_code":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     await inst.sms_queue.put(code.strip())
@@ -567,6 +635,9 @@ async def act_code(inst: Inst, code: str) -> dict:
 
 
 async def act_password(inst: Inst, password: str) -> dict:
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_password(inst, password)
     if inst.stage != "awaiting_password":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     await inst.pw_queue.put(password)
@@ -574,6 +645,9 @@ async def act_password(inst: Inst, password: str) -> dict:
 
 
 async def act_reset(inst: Inst) -> dict:
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_reset(inst)
     await stop_client(inst)
     session_path = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
     removed = False
@@ -606,6 +680,9 @@ def resolve_chat_id(inst: Inst, value: int) -> int:
 
 
 async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_send_text(inst, body)
     if inst.client is None or inst.stage != "authorized":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     chat_id = body.chat_id
@@ -640,7 +717,7 @@ async def index():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "instances": len(INSTANCES)}
+    return {"ok": True, "instances": len(INSTANCES), "telegram": TG is not None}
 
 
 # ---------------------------------------------------------------- routes: admin
@@ -658,13 +735,16 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
     name = body.name.strip().lower()
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
         raise HTTPException(status_code=400, detail="name: a-z, 0-9, _ - до 32 символов")
+    itype = (body.type or "max").strip().lower()
+    if itype not in ("max", "telegram"):
+        raise HTTPException(status_code=400, detail="type: max | telegram")
     if name in INSTANCES:
         raise HTTPException(status_code=409, detail="instance already exists")
     inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,
-                webhook_url=body.webhook_url.rstrip("/"))
+                webhook_url=body.webhook_url.rstrip("/"), type=itype)
     INSTANCES[name] = inst
     save_instances()
-    return {"ok": True, "name": name, "api_key": inst.api_key}
+    return {"ok": True, "name": name, "type": itype, "api_key": inst.api_key}
 
 
 @app.get("/admin/instances")
@@ -689,9 +769,11 @@ async def delete_instance(name: str, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
     inst = get_inst(name)
     await stop_client(inst)
-    session_path = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
-    if os.path.exists(session_path):
-        os.remove(session_path)
+    base = os.path.join(SESSIONS_DIR, inst.name)
+    for suffix in (".db", ".session", ".session-journal"):
+        p = base + suffix
+        if os.path.exists(p):
+            os.remove(p)
     del INSTANCES[name]
     save_instances()
     return {"ok": True, "deleted": name}
@@ -747,6 +829,44 @@ async def i_recent(name: str, x_api_key: str = Header(default="")):
     inst = get_inst(name)
     require_inst(x_api_key, inst)
     return {"items": list(inst.recent)}
+
+
+@app.post("/i/{name}/qr")
+async def i_qr(name: str, x_api_key: str = Header(default="")):
+    """Telegram: начать вход по QR-коду (как в WhatsApp Web)."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=400, detail="qr: только для telegram-инстансов")
+    require_tg()
+    return await TG.qr_start(inst)
+
+
+@app.get("/i/{name}/qr.png")
+async def i_qr_png(name: str, x_api_key: str = Header(default="")):
+    """Telegram: текущий QR-код картинкой PNG."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=400, detail="qr: только для telegram-инстансов")
+    url = inst.qr_url
+    if not url:
+        raise HTTPException(status_code=404, detail="нет активного qr")
+    return Response(content=TG.qr_png_bytes(url), media_type="image/png")
+
+
+@app.get("/i/{name}/getFile")
+async def i_get_file(name: str, message_id: int, chat_id: Optional[int] = None,
+                     x_api_key: str = Header(default="")):
+    """Telegram: скачать вложение из сообщения."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=400, detail="getFile: только для telegram-инстансов")
+    require_tg()
+    if chat_id is None:
+        raise HTTPException(status_code=400, detail="need chat_id")
+    return await TG.get_file(inst, chat_id, message_id)
 
 
 # ---------------------------------------------------------------- legacy routes (default instance)
