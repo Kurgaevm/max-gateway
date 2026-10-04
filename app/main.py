@@ -574,7 +574,18 @@ HTTP_PASS = os.environ.get("MAXGW_HTTP_PASS") or _load_or_create_http_pass()
 
 if HTTP_PASS:
     import base64
+    import hashlib
     import hmac
+
+    def _cookie_ok(request) -> bool:
+        want = hmac.new(HTTP_PASS.encode(), b"maxgw-session",
+                        hashlib.sha256).hexdigest()[:32]
+        return hmac.compare_digest(request.cookies.get("maxgw_auth", ""), want)
+
+    def _grant_admin(request):
+        headers = [(k, v) for k, v in request.scope.get("headers", [])
+                   if k != b"x-api-key"]
+        request.scope["headers"] = headers + [(b"x-api-key", API_KEY.encode())]
 
     @app.middleware("http")
     async def http_basic_auth(request, call_next):
@@ -582,19 +593,29 @@ if HTTP_PASS:
         if xk and (is_admin(xk) or any(i.api_key == xk
                                        for i in INSTANCES.values())):
             return await call_next(request)  # valid api key: basic not needed
+        if _cookie_ok(request):
+            _grant_admin(request)
+            return await call_next(request)  # logged-in session
         expected = "Basic " + base64.b64encode(
             f"{HTTP_USER}:{HTTP_PASS}".encode()).decode()
         if not hmac.compare_digest(request.headers.get("authorization", ""),
                                    expected):
+            log.info("401 %s basic=%s cookie=%s ua=%s", request.url.path,
+                     "y" if request.headers.get("authorization") else "n",
+                     "y" if request.cookies.get("maxgw_auth") else "n",
+                     (request.headers.get("user-agent", "") or "")[:40])
             return Response(
                 status_code=401, content="Unauthorized",
                 headers={"WWW-Authenticate": 'Basic realm="max-gateway"'})
-        # valid basic auth == admin session: inject the admin api key so
-        # the web UI needs no separate key paste
-        headers = [(k, v) for k, v in request.scope.get("headers", [])
-                   if k != b"x-api-key"]
-        request.scope["headers"] = headers + [(b"x-api-key", API_KEY.encode())]
-        return await call_next(request)
+        # valid basic auth == admin session from now on
+        _grant_admin(request)
+        resp = await call_next(request)
+        resp.set_cookie("maxgw_auth",
+                        hmac.new(HTTP_PASS.encode(), b"maxgw-session",
+                                 hashlib.sha256).hexdigest()[:32],
+                        httponly=True, samesite="lax", max_age=30 * 86400,
+                        secure=request.url.scheme == "https")
+        return resp
 
 
 # ---------------------------------------------------------------- auth
