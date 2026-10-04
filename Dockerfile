@@ -8,8 +8,7 @@ RUN pip install --no-cache-dir \
     uvicorn \
     httpx \
     "telethon>=1.36,<2" \
-    qrcode
-    pillow
+    qrcode \n    pillow
 
 COPY app /app
 
