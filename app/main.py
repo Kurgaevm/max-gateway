@@ -554,7 +554,8 @@ def _load_or_create_http_pass() -> str:
             return json.loads(p.read_text(encoding="utf-8"))["password"]
     except Exception:  # noqa: BLE001
         pass
-    pwd = secrets.token_urlsafe(12)
+    _alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    pwd = "".join(secrets.choice(_alphabet) for _ in range(14))
     try:
         p.write_text(json.dumps({"user": HTTP_USER, "password": pwd},
                                 ensure_ascii=False), encoding="utf-8")
@@ -577,6 +578,10 @@ if HTTP_PASS:
 
     @app.middleware("http")
     async def http_basic_auth(request, call_next):
+        xk = request.headers.get("x-api-key", "")
+        if xk and (is_admin(xk) or any(i.api_key == xk
+                                       for i in INSTANCES.values())):
+            return await call_next(request)  # valid api key: basic not needed
         expected = "Basic " + base64.b64encode(
             f"{HTTP_USER}:{HTTP_PASS}".encode()).decode()
         if not hmac.compare_digest(request.headers.get("authorization", ""),
