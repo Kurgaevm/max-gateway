@@ -18,6 +18,8 @@ services:
       REG_LAST_NAME: ${MAXGW_REG_LAST:-Test}
       TG_API_ID: ${TG_API_ID:-}
       TG_API_HASH: ${TG_API_HASH:-}
+      MAXGW_HTTP_USER: ${MAXGW_HTTP_USER:-admin}
+      MAXGW_HTTP_PASS: ${MAXGW_HTTP_PASS:-}
       WORK_DIR: /data
       SESSION_NAME: maxgw.db
       LOG_LEVEL: INFO

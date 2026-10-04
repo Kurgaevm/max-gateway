@@ -539,6 +539,54 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="max-gateway", lifespan=lifespan)
 
 
+# ------------------------------------------------- http basic auth (web gate)
+
+HTTP_USER = os.environ.get("MAXGW_HTTP_USER", "admin")
+
+
+def _load_or_create_http_pass() -> str:
+    """MAXGW_HTTP_PASS env wins; else persisted WORK_DIR/http_auth.json;
+    else generated once, persisted and printed to stdout (docker logs)."""
+    import pathlib
+    p = pathlib.Path(os.environ.get("WORK_DIR", "/data")) / "http_auth.json"
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))["password"]
+    except Exception:  # noqa: BLE001
+        pass
+    pwd = secrets.token_urlsafe(12)
+    try:
+        p.write_text(json.dumps({"user": HTTP_USER, "password": pwd},
+                                ensure_ascii=False), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        log.warning("http_auth persist failed: %s", e)
+    print("\n" + "=" * 58)
+    print("  ВЕБ-ДОСТУП К ШЛЮЗУ (логин и пароль basic auth)")
+    print(f"    логин:  {HTTP_USER}")
+    print(f"    пароль: {pwd}")
+    print(f"    сохранено: {p}")
+    print("=" * 58 + "\n", flush=True)
+    return pwd
+
+
+HTTP_PASS = os.environ.get("MAXGW_HTTP_PASS") or _load_or_create_http_pass()
+
+if HTTP_PASS:
+    import base64
+    import hmac
+
+    @app.middleware("http")
+    async def http_basic_auth(request, call_next):
+        expected = "Basic " + base64.b64encode(
+            f"{HTTP_USER}:{HTTP_PASS}".encode()).decode()
+        if not hmac.compare_digest(request.headers.get("authorization", ""),
+                                   expected):
+            return Response(
+                status_code=401, content="Unauthorized",
+                headers={"WWW-Authenticate": 'Basic realm="max-gateway"'})
+        return await call_next(request)
+
+
 # ---------------------------------------------------------------- auth
 
 
