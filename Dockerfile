@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir \
     httpx \
     "telethon>=1.36,<2" \
     qrcode
+    pillow
 
 COPY app /app
 
