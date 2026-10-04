@@ -153,7 +153,7 @@ function saveKey() {
 async function api(path, method='GET', body=null) {
   const r = await fetch(path, {
     method,
-    headers: { 'X-Api-Key': KEY, 'Content-Type': 'application/json' },
+    headers: { ...(KEY && {'X-Api-Key': KEY}), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : null,
   });
   const j = await r.json().catch(() => ({}));

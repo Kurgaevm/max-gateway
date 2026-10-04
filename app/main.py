@@ -589,6 +589,11 @@ if HTTP_PASS:
             return Response(
                 status_code=401, content="Unauthorized",
                 headers={"WWW-Authenticate": 'Basic realm="max-gateway"'})
+        # valid basic auth == admin session: inject the admin api key so
+        # the web UI needs no separate key paste
+        headers = [(k, v) for k, v in request.scope.get("headers", [])
+                   if k != b"x-api-key"]
+        request.scope["headers"] = headers + [(b"x-api-key", API_KEY.encode())]
         return await call_next(request)
 
 
