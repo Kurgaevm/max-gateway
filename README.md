@@ -62,6 +62,14 @@ MAXGW_DOMAIN=max.example.ru curl -fsSL https://raw.githubusercontent.com/Kurgaev
 
 ## Первый вход
 
+Веб-интерфейс закрыт basic auth: логин `admin` (меняется через `MAXGW_HTTP_USER` в `.env`), пароль генерируется автоматически при первом запуске. Установщик показывает оба в финальном отчёте; посмотреть позже:
+
+```bash
+docker exec maxgateway cat /data/http_auth.json
+```
+
+Задать свой пароль — впишите `MAXGW_HTTP_PASS=...` в `.env` и перезапустите: `docker compose up -d`.
+
 1. В веб-интерфейсе создайте инстанс нужного типа (MAX или Telegram) и выберите его
 2. Введите телефон аккаунта и нажмите «Запросить код» (для Telegram код придёт в приложение Telegram, не в SMS)
 3. Введите код

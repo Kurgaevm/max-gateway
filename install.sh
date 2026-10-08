@@ -73,6 +73,19 @@ fi
 
 docker compose up -d --build
 
+# --- Логин/пароль веб-доступа (basic auth): env из .env, иначе из data/http_auth.json ---
+HTTP_USER=$(grep '^MAXGW_HTTP_USER=' .env 2>/dev/null | cut -d= -f2 || true); HTTP_USER=${HTTP_USER:-admin}
+HTTP_PASS=$(grep '^MAXGW_HTTP_PASS=' .env 2>/dev/null | cut -d= -f2 || true)
+if [ -z "$HTTP_PASS" ]; then
+  AUTH_FILE="$DIR/data/http_auth.json"
+  for _ in $(seq 1 30); do
+    [ -s "$AUTH_FILE" ] && break
+    sleep 1
+  done
+  HTTP_PASS=$(sed -n 's/.*"password": *"\([^"]*\)".*/\1/p' "$AUTH_FILE" 2>/dev/null || true)
+  [ -n "$HTTP_PASS" ] || HTTP_PASS="(не создан — смотри: docker logs maxgateway)"
+fi
+
 if [ "$WANT_DOMAIN" = 1 ]; then
   docker network connect localai_default maxgateway 2>/dev/null || true
   if grep -q "$ADDON_MARK" "$ADDON_FILE" 2>/dev/null; then
@@ -102,6 +115,9 @@ say ""
 say "=============================================="
 say " Готово."
 say " Веб-интерфейс: $URL"
+say " Логин:  $HTTP_USER"
+say " Пароль: $HTTP_PASS"
 say " API-ключ: $KEY"
+say " Логин/пароль позже: docker exec maxgateway cat /data/http_auth.json"
 say " Дальше: README.md, раздел «Первый вход»"
 say "=============================================="
