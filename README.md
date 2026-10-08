@@ -118,6 +118,24 @@ GET /i/tg1/getFile?chat_id=123456&message_id=812
 
 ## Подключение к n8n
 
+### Шлюз и n8n на одном сервере (общая docker-сеть)
+
+Чтобы n8n звал шлюз по имени контейнера (`http://maxgateway:8090`), подключите его к docker-сети n8n через локальный файл `docker-compose.override.yml` (не коммитится, в `.gitignore`):
+
+```yaml
+services:
+  maxgateway:
+    networks:
+      - n8n
+
+networks:
+  n8n:
+    name: localai_default   # имя сети вашего n8n-стека: `docker network ls | grep -i n8n`
+    external: true
+```
+
+Затем `docker compose up -d`. Если n8n на другом сервере — override не нужен, открывайте порт через reverse proxy и вызывайте по HTTPS.
+
 ### Входящие сообщения
 
 В `.env` укажите адрес вебхука (общий для всех инстансов) или задайте отдельный вебхук каждому инстансу через API `POST /admin/instances/{имя}/webhook`:

@@ -3,3 +3,6 @@ data/
 PyMax/
 __pycache__/
 *.pyc
+.env.bak
+.env.*
+docker-compose.override.yml
