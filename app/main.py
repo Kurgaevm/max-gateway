@@ -948,8 +948,53 @@ async def i_get_file(name: str, message_id: int, chat_id: Optional[int] = None,
     return await TG.get_file(inst, chat_id, message_id)
 
 
-# ---------------------------------------------------------------- legacy routes (default instance)
+@app.get("/i/{name}/entity")
+async def i_entity(name: str, query: str = "", x_api_key: str = Header(default="")):
+    """Telegram: @username/ссылка/телефон/chat_id -> инфо о чате (числовой chatId)."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=501, detail="entity: пока только telegram-инстансы")
+    require_tg()
+    return await TG.resolve_entity(inst, query)
 
+
+@app.get("/i/{name}/dialogs")
+async def i_dialogs(name: str, limit: int = 100, x_api_key: str = Header(default="")):
+    """Telegram: список диалогов/каналов/групп аккаунта (поиск канала по названию)."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=501, detail="dialogs: пока только telegram-инстансы")
+    require_tg()
+    return await TG.list_dialogs(inst, limit)
+
+
+@app.get("/i/{name}/topics")
+async def i_topics(name: str, query: str = "", limit: int = 200,
+                   x_api_key: str = Header(default="")):
+    """Telegram: темы форума у группы."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=501, detail="topics: пока только telegram-инстансы")
+    require_tg()
+    return await TG.list_topics(inst, query, limit)
+
+
+@app.get("/i/{name}/history")
+async def i_history(name: str, query: str = "", limit: int = 20, topic_id: Optional[int] = None,
+                    x_api_key: str = Header(default="")):
+    """Telegram: последние сообщения чата/канала/темы форума (query: @username, ссылка, chat_id)."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if inst.type != "telegram":
+        raise HTTPException(status_code=501, detail="history: пока только telegram-инстансы")
+    require_tg()
+    return await TG.read_history(inst, query, limit, topic_id)
+
+
+# ---------------------------------------------------------------- legacy routes (default instance)
 
 @app.get("/status")
 async def legacy_status(x_api_key: str = Header(default="")):

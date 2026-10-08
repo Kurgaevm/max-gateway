@@ -16,6 +16,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import time
 from typing import Any, Optional
 from urllib.parse import quote
@@ -457,6 +458,161 @@ async def act_send_text(inst: Any, body: Any) -> dict:
         "chatId": str(m.chat_id),
         "messageId": str(m.id),
     }
+
+
+# ------------------------------------------------------- resolve / history
+
+def _entity_query(query: str) -> Any:
+    """@username | t.me/... | телефон | числовой chat_id -> аргумент get_entity."""
+    q = (query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is empty")
+    if q.startswith(("https://t.me/", "http://t.me/", "tg://resolve?domain=")):
+        q = q.split("domain=", 1)[-1] if "domain=" in q else q.rstrip("/").rsplit("/", 1)[-1]
+    q = q.lstrip("@")
+    if q.startswith("+") or re.fullmatch(r"\d{7,15}", q):
+        # телефон: get_entity умеет только по контакту, но попробовать можно
+        return q
+    if re.fullmatch(r"-?\d+", q):
+        return int(q)
+    return q
+
+
+def _entity_info(entity: Any) -> dict:
+    kind = "unknown"
+    if getattr(entity, "broadcast", None):
+        kind = "channel"
+    elif hasattr(entity, "first_name") or hasattr(entity, "is_self"):
+        kind = "user"
+    elif getattr(entity, "megagroup", None) or hasattr(entity, "participants_count"):
+        kind = "chat"
+    title = getattr(entity, "title", None)
+    if not title and kind == "user":
+        title = " ".join(
+            x for x in (getattr(entity, "first_name", None), getattr(entity, "last_name", None)) if x
+        ) or None
+    phone = getattr(entity, "phone", None)
+    return {
+        "chatId": str(utils.get_peer_id(entity)),
+        "type": kind,
+        "title": title,
+        "username": getattr(entity, "username", None),
+        "phone": ("+" + phone) if phone else None,
+        "isBot": bool(getattr(entity, "bot", False)),
+    }
+
+
+async def resolve_entity(inst: Any, query: str) -> dict:
+    """@username/ссылка/телефон/chat_id -> инфо о чате (и числовой chatId)."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    try:
+        entity = await inst.client.get_entity(_entity_query(query))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=f"entity not found: {query}") from e
+    except errors.RPCError as e:
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
+    info = _entity_info(entity)
+    info.update({"ok": True, "instance": inst.name})
+    return info
+
+
+async def list_dialogs(inst: Any, limit: int = 100) -> dict:
+    """Диалоги/каналы/группы аккаунта: id, название, username, тип."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    limit = max(1, min(int(limit or 100), 500))
+    items = []
+    async for d in inst.client.iter_dialogs(limit=limit):
+        e = d.entity
+        kind = "unknown"
+        if getattr(e, "broadcast", None):
+            kind = "channel"
+        elif getattr(e, "megagroup", None):
+            kind = "group"
+        elif hasattr(e, "first_name"):
+            kind = "user"
+        items.append({
+            "chatId": str(d.id),
+            "title": d.name,
+            "username": getattr(e, "username", None),
+            "type": kind,
+            "unread": d.unread_count or 0,
+            "lastDate": d.date.isoformat() if d.date else None,
+        })
+    return {"ok": True, "instance": inst.name, "items": items}
+
+
+async def list_topics(inst: Any, query: str, limit: int = 200) -> dict:
+    """Темы форума у группы (для каналов с форумными топиками)."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    from telethon.tl import functions
+
+    entity = await inst.client.get_entity(_entity_query(query))
+    items = []
+    res = await inst.client(functions.messages.GetForumTopicsRequest(
+        peer=entity, offset_date=None, offset_id=0, offset_topic=0, limit=max(1, min(int(limit or 200), 400))))
+    for t in res.topics:
+        title = getattr(t, "title", None)
+        if not title:
+            continue
+        items.append({"id": t.id, "title": title, "topMessage": getattr(t, "top_message", None)})
+    return {"ok": True, "instance": inst.name, "chatId": str(utils.get_peer_id(entity)), "items": items}
+
+
+async def read_history(inst: Any, query: str, limit: int = 20, topic_id: Optional[int] = None) -> dict:
+    """Последние сообщения чата/канала/темы форума (старые -> новые)."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    limit = max(1, min(int(limit or 20), 500))
+    try:
+        entity = await inst.client.get_entity(_entity_query(query))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=f"entity not found: {query}") from e
+    items = []
+    kwargs: dict = {"limit": limit}
+    if topic_id:
+        kwargs["reply_to"] = int(topic_id)
+    async for m in inst.client.iter_messages(entity, **kwargs):
+        name = None
+        sender = m.sender
+        if sender is not None:
+            name = getattr(sender, "title", None) or " ".join(
+                x for x in (getattr(sender, "first_name", None), getattr(sender, "last_name", None)) if x
+            ) or None
+        file_info = None
+        if getattr(m, "file", None):
+            f = m.file
+            file_info = {
+                "name": f.name,
+                "size": f.size,
+                "mime": f.mime_type,
+            }
+        wp = getattr(m, "web_preview", None)
+        preview_url = getattr(wp, "url", None) if wp else None
+        buttons = []
+        try:
+            for row in (m.buttons or []):
+                for b in row:
+                    u = getattr(b, "url", None)
+                    if u:
+                        buttons.append(u)
+        except Exception:  # noqa: BLE001
+            pass
+        items.append({
+            "id": m.id,
+            "date": m.date.isoformat() if m.date else None,
+            "out": bool(m.out),
+            "fromId": str(m.from_id) if m.from_id is not None else None,
+            "from": name,
+            "text": (m.text or "")[:4000],
+            "file": file_info,
+            "previewUrl": preview_url,
+            "buttons": buttons,
+        })
+    items.reverse()
+    return {"ok": True, "instance": inst.name, "entity": _entity_info(entity), "items": items}
 
 
 async def get_file(inst: Any, chat_id: int, message_id: int) -> Response:
