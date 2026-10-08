@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Установщик MAX Шлюза. Запуск:
 #   curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
+# Сразу с доменом (неинтерактивно):
+#   MAXGW_DOMAIN=max.example.ru curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
 set -euo pipefail
 
 REPO="https://github.com/Kurgaevm/max-gateway.git"
 DIR="${MAXGW_DIR:-$HOME/max-gateway}"
+STACK_DIR="${SELFHOST_DIR:-$HOME/selfhost-ai}"
+ADDON_FILE="$STACK_DIR/caddy-addon/tls-snippet.conf"
+ADDON_MARK="max-gateway — добавлено установщиком"
 
-command -v docker >/dev/null 2>&1 || { echo "Ошибка: Docker не установлен. Инструкция: https://docs.docker.com/engine/install/"; exit 1; }
-docker compose version >/dev/null 2>&1 || { echo "Ошибка: нужен Docker Compose v2 (плагин compose)."; exit 1; }
+say() { printf '%s\n' "$*"; }
+die() { say "Ошибка: $*" >&2; exit 1; }
+
+command -v docker >/dev/null 2>&1 || die "Docker не установлен. Инструкция: https://docs.docker.com/engine/install/"
+docker compose version >/dev/null 2>&1 || die "нужен Docker Compose v2 (плагин compose)."
 
 if [ -d "$DIR/.git" ]; then
-  echo "Обновляю установку в $DIR"
+  say "Обновляю установку в $DIR"
   git -C "$DIR" pull --ff-only
 else
   git clone "$REPO" "$DIR"
@@ -26,16 +34,74 @@ MAXGW_PHONE=
 MAXGW_REG_FIRST=Salon
 MAXGW_REG_LAST=Bot
 EOF
-  echo "Создан .env со свежим API-ключом."
+  say "Создан .env со свежим API-ключом."
+fi
+
+# --- Домен (опционально): HTTPS-доступ снаружи через Caddy из стека selfhost-ai ---
+DOMAIN="${MAXGW_DOMAIN:-}"
+if [ -z "$DOMAIN" ] && [ -r /dev/tty ]; then
+  printf 'Домен для веб-интерфейса (например max.salon.ru; Enter — пропустить): '
+  IFS= read -r DOMAIN < /dev/tty || DOMAIN=""
+fi
+
+WANT_DOMAIN=0
+if [ -n "$DOMAIN" ]; then
+  [[ "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$ ]] \
+    || die "'$DOMAIN' не похож на домен"
+
+  [ -d "$STACK_DIR" ] || die "каталог стека $STACK_DIR не найден. Укажи SELFHOST_DIR=<путь к selfhost-ai> и перезапусти, либо ставь без домена."
+  docker ps --format '{{.Names}}' | grep -qx caddy || die "контейнер caddy не запущен. Сначала установи стек selfhost-ai, потом запускай с доменом."
+  docker network inspect localai_default >/dev/null 2>&1 || die "docker-сеть localai_default не найдена. Сначала установи стек selfhost-ai."
+
+  # Подключаем шлюз к сети стека, чтобы Caddy звал его по имени maxgateway:8090.
+  # Файл в .gitignore — обновления репозитория его не трогают.
+  if [ ! -f docker-compose.override.yml ]; then
+    cat > docker-compose.override.yml <<'EOF'
+services:
+  maxgateway:
+    networks:
+      - n8n
+
+networks:
+  n8n:
+    name: localai_default
+    external: true
+EOF
+  fi
+  WANT_DOMAIN=1
 fi
 
 docker compose up -d --build
 
+if [ "$WANT_DOMAIN" = 1 ]; then
+  docker network connect localai_default maxgateway 2>/dev/null || true
+  if grep -q "$ADDON_MARK" "$ADDON_FILE" 2>/dev/null; then
+    say "Блок max-gateway уже есть в $ADDON_FILE. Домен меняется там руками + 'docker exec caddy caddy reload --config /etc/caddy/Caddyfile'."
+  else
+    cat >> "$ADDON_FILE" <<EOF
+
+# --- $ADDON_MARK ---
+$DOMAIN {
+    import service_tls
+    reverse_proxy maxgateway:8090
+}
+EOF
+    docker exec caddy caddy reload --config /etc/caddy/Caddyfile \
+      || die "caddy reload не прошёл. Проверь $ADDON_FILE и выполни: docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+    say "Caddy настроен: $DOMAIN -> maxgateway:8090"
+  fi
+  PUBLIC_IP=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "неизвестен (нет исходящего curl)")
+  say "Не забудь DNS: A-запись $DOMAIN -> $PUBLIC_IP (без неё Let's Encrypt не выпустит сертификат)."
+  URL="https://$DOMAIN/"
+else
+  URL="http://127.0.0.1:8090/"
+fi
+
 KEY=$(grep '^MAXGW_API_KEY=' .env | cut -d= -f2)
-echo
-echo "=============================================="
-echo " Готово."
-echo " Веб-интерфейс: http://127.0.0.1:8090/"
-echo " API-ключ: $KEY"
-echo " Дальше: README.md, раздел «Первый вход»"
-echo "=============================================="
+say ""
+say "=============================================="
+say " Готово."
+say " Веб-интерфейс: $URL"
+say " API-ключ: $KEY"
+say " Дальше: README.md, раздел «Первый вход»"
+say "=============================================="

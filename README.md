@@ -47,6 +47,19 @@ docker compose up -d --build
 
 После установки откройте веб-интерфейс: `http://127.0.0.1:8090/` и введите API-ключ из `.env` (строка `MAXGW_API_KEY`).
 
+### Домен и HTTPS (если на сервере стоит selfhost-ai)
+
+Установщик умеет сразу привязать домен — спросит при установке, или передайте переменной:
+
+```bash
+MAXGW_DOMAIN=max.example.ru curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
+# каталог стека нестандартный — добавь SELFHOST_DIR=/путь/к/selfhost-ai
+```
+
+Установщик сам: подключит шлюз к docker-сети стека (`localai_default`), допишет блок в `caddy-addon/tls-snippet.conf` стека (файл в `.gitignore` стека, обновления `make update` его не затирают) и перезагрузит Caddy. Останется только DNS: A-запись `домен -> IP сервера`, сертификат Let's Encrypt Caddy выпустит сам.
+
+Вход: `https://max.example.ru`, тот же API-ключ. Сменить домен позже — отредактируй блок в `caddy-addon/tls-snippet.conf` и выполни `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+
 ## Первый вход
 
 1. В веб-интерфейсе создайте инстанс нужного типа (MAX или Telegram) и выберите его
