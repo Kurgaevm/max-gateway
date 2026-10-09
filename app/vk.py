@@ -183,14 +183,29 @@ async def _open_logged_page(inst: Any, headless: bool = True) -> tuple[Any, Any,
     return pw, ctx, page
 
 
+def _parse_web_token(raw: Optional[str]) -> Optional[str]:
+    """Значение ключа бывает сырым vk1.a... и JSON {"access_token": ...}."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("{"):
+        try:
+            return str(json.loads(raw).get("access_token") or "").strip() or None
+        except ValueError:
+            return None
+    return raw
+
+
 async def _extract_token(page: Any) -> Optional[dict]:
     data = await page.evaluate(
         "() => { const o={}; for (let i=0;i<localStorage.length;i++){const k=localStorage.key(i); o[k]=localStorage.getItem(k);} return o; }"
     )
-    tok = data.get(WEB_TOKEN_KEY)
+    tok = _parse_web_token(data.get(WEB_TOKEN_KEY))
     if not tok:
         return None
-    return {"web_token": tok, "snapshot": {k: v for k, v in data.items() if len(v or "") < 512}}
+    dev = (data.get("tracer-device-id") or "").strip().strip('"') or None
+    return {"web_token": tok, "device_id": dev,
+            "snapshot": {k: v for k, v in data.items() if len(v or "") < 512}}
 
 
 async def _find_field(page: Any, sel: str, timeout: float = 4000) -> Any:
@@ -251,7 +266,10 @@ async def _dismiss_captcha(page: Any, rounds: int = 2) -> bool:
 async def _authorized_state(inst: Any, page: Any, ctx: Any) -> bool:
     """Вход выполнен? Перебираем известные признаки авторизованной страницы."""
     try:
-        if "vk.com/" in page.url and "/login" not in page.url and "id.vk.com" not in page.url:
+        url = page.url
+        # ВК редиректит на vk.ru (не только vk.com); id.vk.* — экраны входа
+        if "/login" not in url and "id.vk." not in url and (
+                "vk.com/" in url or "vk.ru/" in url):
             tok = await _extract_token(page)
             if tok:
                 sess = _vk_client(inst) or {}
