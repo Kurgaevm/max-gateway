@@ -761,7 +761,9 @@ async def act_password(inst: Inst, password: str) -> dict:
         require_tg()
         return await TG.act_password(inst, password)
     if inst.type == "vk":
-        raise HTTPException(status_code=400, detail="vk: пароль вводится сразу в /login")
+        if VK is None:
+            raise HTTPException(status_code=503, detail="VK adapter unavailable")
+        return await VK.act_password(inst, password)
     if inst.stage != "awaiting_password":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     await inst.pw_queue.put(password)

@@ -427,6 +427,94 @@ async def act_code(inst: Any, code: str) -> dict:
         raise HTTPException(status_code=400, detail=inst.error) from e
 
 
+async def _field_exists(page: Any, sel: str) -> bool:
+    """Мгновенная проверка (без ожидания) наличия селектора в любом фрейме."""
+    for fr in page.frames:
+        try:
+            if await fr.locator(sel).count() > 0:
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+async def act_password(inst: Any, password: str) -> dict:
+    """Ввод пароля на живой странице посреди входа.
+
+    VK ID может запросить пароль аккаунта ПОСЛЕ сканирования QR (подтверждение)
+    или после ввода телефона. В UI шлюза в этот момент нет поля пароля —
+    этот эндпоинт заполняет input[type=password] в живом браузере и жмёт
+    «Продолжить». Дальше ВК либо пускает, либо просит код (СМС/почта).
+    """
+    if inst.stage not in ("awaiting_code", "awaiting_qr"):
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    lctx = _login_ctx(inst)
+    if lctx is None:
+        raise HTTPException(status_code=409, detail="login ctx expired: перезапустите login")
+    page = lctx.page
+    try:
+        pw_field = None
+        for _ in range(3):
+            if await _dismiss_captcha(page):
+                await asyncio.sleep(2.0)
+            pw_field = await _find_field(page, "input[type='password']", timeout=6000)
+            if pw_field is not None:
+                break
+            await asyncio.sleep(2.0)
+        if pw_field is None:
+            # не фатально: сессия жива, /password можно повторить, stage не сбрасываем
+            body = await page.evaluate("() => document.body.innerText.slice(0, 150)")
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)
+            raise HTTPException(
+                status_code=400,
+                detail="vk: поле пароля не появилось (url=" + page.url + " | " +
+                       " ".join(body.split())[:120] + "). Повторите /password",
+            )
+        qt = getattr(inst, "qr_task", None)
+        if qt is not None:
+            qt.cancel()
+            inst.qr_task = None
+        await pw_field.fill(password)
+        btn = await _find_field(page, "button:has-text('Продолжить')", timeout=3000)
+        if btn is None:
+            btn = await _find_field(page, "button:has-text('Войти'), button[type='submit']",
+                                    timeout=2000)
+        try:
+            if btn is not None:
+                await btn.click(timeout=5000)
+            else:
+                await pw_field.press("Enter")
+        except Exception:  # noqa: BLE001
+            await pw_field.press("Enter")
+        for i in range(40):
+            await asyncio.sleep(1.0)
+            if i % 5 == 4:
+                await _dismiss_captcha(page)
+            if await _authorized_state(inst, page, lctx.context):
+                me = await _fetch_me(inst)
+                await _kill_login_ctx(inst)
+                await _mark_authorized(inst, me)
+                return {"ok": True, "stage": inst.stage, "me": me}
+            # после пароля ВК обычно просит код подтверждения
+            if await _field_exists(page, "input[name='code'], input[inputmode='numeric']"):
+                inst.stage = "awaiting_code"
+                inst.hint = "пароль принят: введите код подтверждения (СМС/почта)"
+                return {"ok": True, "stage": inst.stage}
+        # ни авторизации, ни кода: возможно неверный пароль
+        if inst.stage == "awaiting_qr":
+            _start_qr_watch(inst, lctx)
+        err_text = await page.evaluate("() => document.body.innerText.slice(0, 400)")
+        raise HTTPException(status_code=400,
+                            detail="vk: пароль не принят: " + " ".join(err_text.split())[:200])
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        inst.stage = "error"
+        inst.error = f"vk password: {e}"
+        raise HTTPException(status_code=400, detail=inst.error) from e
+
+
 async def _fetch_me(inst: Any) -> dict:
     try:
         r = await api(inst, "users.get", fields="domain")
