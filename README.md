@@ -137,6 +137,45 @@ GET /i/tg1/getFile?chat_id=123456&message_id=812
 
 Ограничения Telegram: за автоматизацию личного аккаунта Telegram может заблокировать (спам первым сообщениям новым людям). Пишите только тем, кто писал вам, или клиентам, которые оставили номер.
 
+## VK-инстансы (личные страницы)
+
+Личная страница ВК как инстанс шлюза. Работает через web_token залогиненного браузера: шлюз держит собственный headless Chromium с персистентным профилем на инстанс (`/data/vk_profiles/`), все запросы идут с IP сервера (токен привязан к IP). Официального API личных сообщений у ВК нет — путь неофициальный, темпы сами ограничиваем (отправка не чаще ~1 сообщения в 5-8 сек).
+
+Создание и вход:
+
+```bash
+curl -u admin:$PASS -X POST http://127.0.0.1:8090/admin/instances \
+  -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"name":"vkmain","type":"vk"}'
+
+# Вход по QR (рекомендуется): откройте qr.png и отсканируйте приложением ВК
+# (Профиль -> Настройки -> Вход по QR). Пароль и код не нужны.
+curl -u admin:$PASS -X POST http://127.0.0.1:8090/i/vkmain/qr -H "X-Api-Key: $KEY"
+curl -u admin:$PASS http://127.0.0.1:8090/i/vkmain/qr.png -H "X-Api-Key: $KEY" -o qr.png
+
+# Либо вход по телефону: придёт код подтверждения (СМС/2FA)
+curl -u admin:$PASS -X POST http://127.0.0.1:8090/i/vkmain/login \
+  -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"phone":"+7...","password":"пароль страницы"}'
+curl -u admin:$PASS -X POST http://127.0.0.1:8090/i/vkmain/code \
+  -H "X-Api-Key: $KEY" -H "Content-Type: application/json" -d '{"code":"1234"}'
+```
+
+После входа доступны те же операции, что у Telegram-инстансов:
+
+```bash
+POST /i/vkmain/sendText    {"chat_id": 123456789, "message": "..."}   # peer_id собеседника
+GET  /i/vkmain/entity?query=durov   # id / короткий адрес / ссылка -> chatId
+GET  /i/vkmain/dialogs     # список диалогов
+GET  /i/vkmain/history?query=123456789&limit=20
+```
+
+Входящие уходят вебхуком в том же формате Green-API, `typeInstance: "vk"`: `senderData.chatId` = peer_id собеседника (личка), `textMessageData.textMessage` = текст.
+
+Токен живёт недолго: шлюз сам перечитывает его из браузерного профиля (обычно без повторного кода). Если сессия истекла — `stage: expired`, повторите вход по QR.
+
+Ограничения VK: метод неофициальный; за массовые первые сообщения страницу могут заблокировать. Держите темп низким (десятки сообщений в день), тексты уникальными, профиль «живым».
+
 ## Подключение к n8n
 
 ### Шлюз и n8n на одном сервере (общая docker-сеть)

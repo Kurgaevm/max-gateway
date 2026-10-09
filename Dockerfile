@@ -9,7 +9,11 @@ RUN pip install --no-cache-dir \
     httpx \
     "telethon>=1.36,<2" \
     qrcode \
-    pillow
+    pillow \
+    "playwright>=1.40"
+
+# Браузер для VK-инстансов (вход и ротация web_token, профиль в /data)
+RUN python -m playwright install --with-deps chromium
 
 COPY app /app
 

@@ -45,6 +45,16 @@ try:
 except Exception as _tg_err:  # noqa: BLE001
     log.warning("Telegram adapter unavailable: %s", _tg_err)
 
+# VK-адаптер (личные страницы, web_token + playwright-профиль).
+VK = None
+try:
+    try:
+        import vk as VK
+    except ImportError:
+        from app import vk as VK
+except Exception as _vk_err:  # noqa: BLE001
+    log.warning("VK adapter unavailable: %s", _vk_err)
+
 API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
 GLOBAL_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
 WORK_DIR = os.environ.get("WORK_DIR", "/data")
@@ -68,7 +78,7 @@ class Inst:
                  api_key: Optional[str] = None, webhook_url: str = "",
                  created: Optional[float] = None, type: str = "max") -> None:
         self.name = name
-        self.type = type  # max | telegram
+        self.type = type  # max | telegram | vk
         self.phone = phone
         self.api_key = api_key or secrets.token_hex(24)
         self.webhook_url = webhook_url or ""
@@ -93,8 +103,16 @@ class Inst:
         self.tg_code_hash: Optional[str] = None
         self.qr_task: Optional[asyncio.Task] = None
         self.qr_url: Optional[str] = None
+        # vk runtime
+        self.vk_sess: Any = None
+        self.vk_lp_task: Optional[asyncio.Task] = None
+        self.vk_login_ctx: Any = None
+        self.vk_send_lock: Any = None
+        self.vk_last_send: float = 0.0
 
     def _live_connected(self) -> bool:
+        if self.type == "vk":
+            return self.stage == "authorized"
         if self.client is None:
             return False
         f = getattr(self.client, "is_connected", None)
@@ -517,6 +535,15 @@ async def stop_client(inst: Inst) -> None:
 async def lifespan(app: FastAPI):
     load_instances()
     for inst in list(INSTANCES.values()):
+        if inst.type == "vk":
+            if VK is not None:
+                try:
+                    await VK.boot(inst)
+                except Exception as e:  # noqa: BLE001
+                    inst.stage = "error"
+                    inst.error = str(e)
+                    log.warning("vk boot %s failed: %s", inst.name, e)
+            continue
         has_session = inst.phone or (
             inst.type == "telegram"
             and os.path.exists(os.path.join(SESSIONS_DIR, inst.name + ".session"))
@@ -530,6 +557,12 @@ async def lifespan(app: FastAPI):
                 log.warning("start %s failed: %s", inst.name, e)
     yield
     for inst in list(INSTANCES.values()):
+        if inst.type == "vk":
+            try:
+                await VK.stop_longpoll(inst)
+            except Exception as e:  # noqa: BLE001
+                log.warning("vk stop %s failed: %s", inst.name, e)
+            continue
         try:
             await stop_client(inst)
         except Exception as e:  # noqa: BLE001
@@ -659,6 +692,7 @@ def require_tg() -> None:
 
 class LoginBody(BaseModel):
     phone: str
+    password: Optional[str] = None  # vk: пароль страницы
 
 
 class CodeBody(BaseModel):
@@ -689,10 +723,14 @@ class WebhookBody(BaseModel):
 # ---------------------------------------------------------------- actions
 
 
-async def act_login(inst: Inst, phone_raw: str) -> dict:
+async def act_login(inst: Inst, phone_raw: str, password: str = "") -> dict:
     if inst.type == "telegram":
         require_tg()
         return await TG.act_login(inst, phone_raw)
+    if inst.type == "vk":
+        if VK is None:
+            raise HTTPException(status_code=503, detail="VK adapter unavailable")
+        return await VK.act_login(inst, phone_raw, password or "")
     phone = normalize_phone(phone_raw)
     old_session = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
     if inst.phone and inst.phone != phone and os.path.exists(old_session):
@@ -707,6 +745,8 @@ async def act_code(inst: Inst, code: str) -> dict:
     if inst.type == "telegram":
         require_tg()
         return await TG.act_code(inst, code)
+    if inst.type == "vk":
+        return await VK.act_code(inst, code)
     if inst.stage != "awaiting_code":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     await inst.sms_queue.put(code.strip())
@@ -717,6 +757,8 @@ async def act_password(inst: Inst, password: str) -> dict:
     if inst.type == "telegram":
         require_tg()
         return await TG.act_password(inst, password)
+    if inst.type == "vk":
+        raise HTTPException(status_code=400, detail="vk: пароль вводится сразу в /login")
     if inst.stage != "awaiting_password":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     await inst.pw_queue.put(password)
@@ -727,6 +769,8 @@ async def act_reset(inst: Inst) -> dict:
     if inst.type == "telegram":
         require_tg()
         return await TG.act_reset(inst)
+    if inst.type == "vk":
+        return await VK.act_reset(inst)
     await stop_client(inst)
     session_path = os.path.join(SESSIONS_DIR, f"{inst.name}.db")
     removed = False
@@ -762,6 +806,8 @@ async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
     if inst.type == "telegram":
         require_tg()
         return await TG.act_send_text(inst, body)
+    if inst.type == "vk":
+        return await VK.act_send_text(inst, body)
     if inst.client is None or inst.stage != "authorized":
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     chat_id = body.chat_id
@@ -796,7 +842,8 @@ async def index():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "instances": len(INSTANCES), "telegram": TG is not None}
+    return {"ok": True, "instances": len(INSTANCES),
+            "telegram": TG is not None, "vk": VK is not None}
 
 
 # ---------------------------------------------------------------- routes: admin
@@ -815,8 +862,8 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
         raise HTTPException(status_code=400, detail="name: a-z, 0-9, _ - до 32 символов")
     itype = (body.type or "max").strip().lower()
-    if itype not in ("max", "telegram"):
-        raise HTTPException(status_code=400, detail="type: max | telegram")
+    if itype not in ("max", "telegram", "vk"):
+        raise HTTPException(status_code=400, detail="type: max | telegram | vk")
     if name in INSTANCES:
         raise HTTPException(status_code=409, detail="instance already exists")
     inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,
@@ -847,7 +894,10 @@ async def set_webhook(name: str, body: WebhookBody, x_api_key: str = Header(defa
 async def delete_instance(name: str, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
     inst = get_inst(name)
-    await stop_client(inst)
+    if inst.type == "vk":
+        await VK.act_reset(inst)  # сессия + браузерный профиль + longpoll
+    else:
+        await stop_client(inst)
     base = os.path.join(SESSIONS_DIR, inst.name)
     for suffix in (".db", ".session", ".session-journal"):
         p = base + suffix
@@ -872,7 +922,7 @@ async def i_status(name: str, x_api_key: str = Header(default="")):
 async def i_login(name: str, body: LoginBody, x_api_key: str = Header(default="")):
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    return await act_login(inst, body.phone)
+    return await act_login(inst, body.phone, password=body.password or "")
 
 
 @app.post("/i/{name}/code")
@@ -912,26 +962,30 @@ async def i_recent(name: str, x_api_key: str = Header(default="")):
 
 @app.post("/i/{name}/qr")
 async def i_qr(name: str, x_api_key: str = Header(default="")):
-    """Telegram: начать вход по QR-коду (как в WhatsApp Web)."""
+    """Telegram/VK: начать вход по QR-коду (как в WhatsApp Web)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    if inst.type != "telegram":
-        raise HTTPException(status_code=400, detail="qr: только для telegram-инстансов")
-    require_tg()
-    return await TG.qr_start(inst)
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.qr_start(inst)
+    if inst.type == "vk":
+        return await VK.qr_start(inst)
+    raise HTTPException(status_code=400, detail="qr: только telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/qr.png")
 async def i_qr_png(name: str, x_api_key: str = Header(default="")):
-    """Telegram: текущий QR-код картинкой PNG."""
+    """Telegram/VK: текущий QR-код картинкой PNG."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    if inst.type != "telegram":
-        raise HTTPException(status_code=400, detail="qr: только для telegram-инстансов")
-    url = inst.qr_url
-    if not url:
-        raise HTTPException(status_code=404, detail="нет активного qr")
-    return Response(content=TG.qr_png_bytes(url), media_type="image/png")
+    if inst.type == "telegram":
+        url = inst.qr_url
+        if not url:
+            raise HTTPException(status_code=404, detail="нет активного qr")
+        return Response(content=TG.qr_png_bytes(url), media_type="image/png")
+    if inst.type == "vk":
+        return Response(content=await VK.qr_png_bytes(inst), media_type="image/png")
+    raise HTTPException(status_code=400, detail="qr: только telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/getFile")
@@ -950,24 +1004,28 @@ async def i_get_file(name: str, message_id: int, chat_id: Optional[int] = None,
 
 @app.get("/i/{name}/entity")
 async def i_entity(name: str, query: str = "", x_api_key: str = Header(default="")):
-    """Telegram: @username/ссылка/телефон/chat_id -> инфо о чате (числовой chatId)."""
+    """Telegram/VK: @username/ссылка/id -> инфо о чате (числовой chatId)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    if inst.type != "telegram":
-        raise HTTPException(status_code=501, detail="entity: пока только telegram-инстансы")
-    require_tg()
-    return await TG.resolve_entity(inst, query)
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.resolve_entity(inst, query)
+    if inst.type == "vk":
+        return await VK.resolve_entity(inst, query)
+    raise HTTPException(status_code=501, detail="entity: только telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/dialogs")
 async def i_dialogs(name: str, limit: int = 100, x_api_key: str = Header(default="")):
-    """Telegram: список диалогов/каналов/групп аккаунта (поиск канала по названию)."""
+    """Telegram/VK: список диалогов аккаунта."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    if inst.type != "telegram":
-        raise HTTPException(status_code=501, detail="dialogs: пока только telegram-инстансы")
-    require_tg()
-    return await TG.list_dialogs(inst, limit)
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.list_dialogs(inst, limit)
+    if inst.type == "vk":
+        return await VK.list_dialogs(inst, limit)
+    raise HTTPException(status_code=501, detail="dialogs: только telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/topics")
@@ -977,7 +1035,7 @@ async def i_topics(name: str, query: str = "", limit: int = 200,
     inst = get_inst(name)
     require_inst(x_api_key, inst)
     if inst.type != "telegram":
-        raise HTTPException(status_code=501, detail="topics: пока только telegram-инстансы")
+        raise HTTPException(status_code=501, detail="topics: только telegram-инстансы")
     require_tg()
     return await TG.list_topics(inst, query, limit)
 
@@ -985,13 +1043,15 @@ async def i_topics(name: str, query: str = "", limit: int = 200,
 @app.get("/i/{name}/history")
 async def i_history(name: str, query: str = "", limit: int = 20, topic_id: Optional[int] = None,
                     x_api_key: str = Header(default="")):
-    """Telegram: последние сообщения чата/канала/темы форума (query: @username, ссылка, chat_id)."""
+    """Telegram/VK: последние сообщения чата (query: @username, ссылка, chat_id/peer_id)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
-    if inst.type != "telegram":
-        raise HTTPException(status_code=501, detail="history: пока только telegram-инстансы")
-    require_tg()
-    return await TG.read_history(inst, query, limit, topic_id)
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.read_history(inst, query, limit, topic_id)
+    if inst.type == "vk":
+        return await VK.read_history(inst, query, limit)
+    raise HTTPException(status_code=501, detail="history: только telegram/vk-инстансы")
 
 
 # ---------------------------------------------------------------- legacy routes (default instance)
