@@ -213,6 +213,41 @@ async def _find_field(page: Any, sel: str, timeout: float = 4000) -> Any:
     return None
 
 
+async def _dismiss_captcha(page: Any, rounds: int = 2) -> bool:
+    """Нажать «Я не робот» на VK ID (капча-чекбокс, живёт в iframe).
+
+    VK ID нередко показывает модалку подтверждения перед формой входа и после
+    каждого её шага; без клика по чекбоксу вход висит вечно.
+    """
+    clicked = False
+    for _ in range(rounds):
+        hit = False
+        for fr in page.frames:  # включает main_frame
+            try:
+                if await fr.get_by_text("не робот").count() == 0:
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            for sel in ("label:has-text('Я не робот')", "label:has-text('не робот')",
+                        "[role='checkbox']", "input[type='checkbox']"):
+                try:
+                    el = fr.locator(sel).first
+                    if await el.count() and await el.is_visible():
+                        await el.click(timeout=2500)
+                        clicked = True
+                        hit = True
+                        log.info("vk: captcha 'я не робот' clicked")
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            if hit:
+                break
+        if not hit:
+            break
+        await page.wait_for_timeout(1500)
+    return clicked
+
+
 async def _authorized_state(inst: Any, page: Any, ctx: Any) -> bool:
     """Вход выполнен? Перебираем известные признаки авторизованной страницы."""
     try:
@@ -269,6 +304,8 @@ async def act_login(inst: Any, phone_raw: str, password: str) -> dict:
                 await _mark_authorized(inst, me)
                 return {"ok": True, "instance": inst.name, "stage": inst.stage}
             await asyncio.sleep(1.0)
+        # капча VK ID («Я не робот») может стоять прямо перед формой входа
+        await _dismiss_captcha(page)
         # форма входа VK ID: на welcome-странице сначала «Войти другим способом»
         login = await _find_field(page, "input[name='login'], input[type='tel']", timeout=3000)
         if login is None:
@@ -297,6 +334,7 @@ async def act_login(inst: Any, phone_raw: str, password: str) -> dict:
         if btn is not None:
             await btn.click()
         await asyncio.sleep(1.5)
+        await _dismiss_captcha(page)
         # следующий экран: пароль или сразу код (если профиль помнит)
         pw_field = await _find_field(page, "input[type='password']", timeout=8000)
         if pw_field is not None:
@@ -306,6 +344,8 @@ async def act_login(inst: Any, phone_raw: str, password: str) -> dict:
                 btn = await _find_field(page, "button[type='submit']", timeout=2000)
             if btn is not None:
                 await btn.click()
+            await asyncio.sleep(1.0)
+            await _dismiss_captcha(page)
         inst.stage = "awaiting_code"
         inst.hint = "код подтверждения ВК (СМС/почта/2FA)"
         log.info("[%s] vk login: code requested for %s", inst.name, phone)
@@ -320,19 +360,41 @@ async def act_login(inst: Any, phone_raw: str, password: str) -> dict:
 
 
 async def act_code(inst: Any, code: str) -> dict:
-    if inst.stage != "awaiting_code":
+    """Ввод кода подтверждения. Работает и после входа по QR: ВК может
+    показать код на экране после сканирования — вводим его этим же эндпоинтом."""
+    if inst.stage not in ("awaiting_code", "awaiting_qr"):
         raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
     lctx = _login_ctx(inst)
     if lctx is None:
         raise HTTPException(status_code=409, detail="login ctx expired: перезапустите login")
     page = lctx.page
     try:
-        code_field = await _find_field(
-            page, "input[name='code'], input[inputmode='numeric']", timeout=5000)
+        # после клика по капче форма кода появляется не мгновенно — ищем с retry
+        code_field = None
+        for _ in range(3):
+            if await _dismiss_captcha(page):
+                await asyncio.sleep(2.0)
+            code_field = await _find_field(
+                page, "input[name='code'], input[inputmode='numeric']", timeout=6000)
+            if code_field is None:
+                code_field = await _find_field(page, "input[type='text']", timeout=3000)
+            if code_field is not None:
+                break
+            await asyncio.sleep(2.0)
         if code_field is None:
-            code_field = await _find_field(page, "input[type='text']", timeout=3000)
-        if code_field is None:
-            raise RuntimeError("не нашли поле кода (форма сменилась?)")
+            # не фатально: сессия жива, /code можно повторить, stage не сбрасываем
+            body = await page.evaluate("() => document.body.innerText.slice(0, 150)")
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)  # QR-ловец был отменён — resurrect
+            raise HTTPException(
+                status_code=400,
+                detail="vk: поле кода не появилось (url=" + page.url + " | " +
+                       " ".join(body.split())[:120] + "). Повторите /code",
+            )
+        qt = getattr(inst, "qr_task", None)
+        if qt is not None:
+            qt.cancel()
+            inst.qr_task = None
         await code_field.fill(code.strip())
         btn = await _find_field(page, "button:has-text('Продолжить')", timeout=3000)
         if btn is None:
@@ -345,8 +407,10 @@ async def act_code(inst: Any, code: str) -> dict:
                 await code_field.press("Enter")
         except Exception:  # noqa: BLE001
             await code_field.press("Enter")
-        for _ in range(15):
+        for i in range(60):
             await asyncio.sleep(1.0)
+            if i % 5 == 4:
+                await _dismiss_captcha(page)
             if await _authorized_state(inst, page, lctx.context):
                 me = await _fetch_me(inst)
                 await _kill_login_ctx(inst)
@@ -384,10 +448,11 @@ async def refresh_token(inst: Any) -> bool:
         inst.error = f"vk refresh: {e}"
         return False
     try:
-        for _ in range(5):
+        for _ in range(10):
             if await _authorized_state(inst, page, ctx):
                 log.info("[%s] web_token refreshed", inst.name)
                 return True
+            await _dismiss_captcha(page)
             await asyncio.sleep(1.0)
         inst.stage = "expired"
         inst.hint = "сессия ВК истекла: нужен повторный login (телефон+пароль+код)"
@@ -409,6 +474,33 @@ async def qr_stop(inst: Any) -> None:
     await _kill_login_ctx(inst)
 
 
+def _start_qr_watch(inst: Any, lctx: "_LoginCtx") -> None:
+    """Фоновый ловец авторизации на живой логин-странице (скан QR / код на экране)."""
+
+    async def loop() -> None:
+        page = lctx.page
+        while True:
+            try:
+                if inst.vk_login_ctx is not lctx:
+                    return  # логин-браузер перезапущен (напр., ввод кода через /code)
+                if await _authorized_state(inst, page, lctx.context):
+                    me = await _fetch_me(inst)
+                    await _kill_login_ctx(inst)
+                    await _mark_authorized(inst, me)
+                    return
+                await _dismiss_captcha(page)
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(2)
+
+    qt = getattr(inst, "qr_task", None)
+    if qt is not None and not qt.done():
+        qt.cancel()
+    inst.qr_task = asyncio.create_task(loop())
+
+
 async def qr_start(inst: Any) -> dict:
     """Вход по QR (как в WhatsApp Web): welcome-страница ВК сама показывает QR.
 
@@ -428,23 +520,9 @@ async def qr_start(inst: Any) -> dict:
         inst.error = f"vk qr: {e}"
         raise HTTPException(status_code=400, detail=inst.error) from e
 
-    async def loop() -> None:
-        page = lctx.page
-        while True:
-            try:
-                if await _authorized_state(inst, page, lctx.context):
-                    me = await _fetch_me(inst)
-                    await _kill_login_ctx(inst)
-                    await _mark_authorized(inst, me)
-                    return
-            except asyncio.CancelledError:
-                return
-            except Exception:  # noqa: BLE001
-                pass
-            await asyncio.sleep(2)
-
-    inst.qr_task = asyncio.create_task(loop())
-    inst.hint = "отсканируйте QR приложением ВК (Профиль -> Настройки -> Вход по QR)"
+    _start_qr_watch(inst, lctx)
+    inst.hint = ("отсканируйте QR приложением ВК; после сканирования ВК может показать "
+                 "код на экране — введите его в поле «Код»")
     log.info("[%s] vk qr login started", inst.name)
     return {"ok": True, "stage": inst.stage,
             "qr_png": f"/i/{inst.name}/qr.png", "ttl": 120}

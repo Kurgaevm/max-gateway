@@ -90,7 +90,7 @@
         <input id="vkPw" placeholder="Пароль страницы ВК (не нужен при входе по QR)" type="password">
       </div>
       <div class="row hidden" id="codeRow" style="margin-bottom:8px">
-        <input id="code" placeholder="Код из SMS или Telegram" inputmode="numeric">
+        <input id="code" placeholder="Код подтверждения (SMS / приложение)" inputmode="numeric">
         <button onclick="doCode()">Подтвердить</button>
       </div>
       <div class="row hidden" id="pwRow">
@@ -103,7 +103,7 @@
       <div class="row">
         <button class="ghost" onclick="startQr()">Вход по QR</button>
       </div>
-      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. ВК: QR — приложение ВК -> Профиль -> Настройки -> Вход по QR (или телефон+пароль+код). Сессия сохраняется, повторный вход не нужен.</div>
+      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. ВК: QR — приложение ВК -> Профиль -> Настройки -> Вход по QR (или телефон+пароль+код). После сканирования QR ВК может показать код подтверждения на экране — картинка QR показывает текущий экран: если код просят ввести на сайте, введите его в поле «Код»; если код показан на сайте, подтвердите его в приложении ВК. Сессия сохраняется, повторный вход не нужен.</div>
     </div>
 
     <div class="card">
@@ -240,7 +240,7 @@ async function refresh() {
       const d = document.createElement('div'); d.textContent = String(v);
       kv.append(b, d);
     }
-    document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code');
+    document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code' && s.stage !== 'awaiting_qr');
     document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
     document.getElementById('vkPwRow').classList.toggle('hidden', s.type !== 'vk');
     document.getElementById('qrRow').classList.toggle('hidden', s.stage !== 'awaiting_qr');
