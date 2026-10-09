@@ -395,18 +395,38 @@ async def act_code(inst: Any, code: str) -> dict:
         if qt is not None:
             qt.cancel()
             inst.qr_task = None
-        await code_field.fill(code.strip())
+        try:
+            await code_field.fill(code.strip(), timeout=8000)
+        except Exception:  # noqa: BLE001
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)
+            raise HTTPException(status_code=400,
+                                detail="vk: поле кода перерисовалось. Повторите /code")
         btn = await _find_field(page, "button:has-text('Продолжить')", timeout=3000)
         if btn is None:
             btn = await _find_field(page, "button:has-text('Подтвердить'), button[type='submit']",
                                     timeout=2000)
-        try:
-            if btn is not None:
+        submitted = False
+        if btn is not None:
+            try:
                 await btn.click(timeout=5000)
-            else:
-                await code_field.press("Enter")
-        except Exception:  # noqa: BLE001
-            await code_field.press("Enter")
+                submitted = True
+            except Exception:  # noqa: BLE001
+                submitted = False
+        if not submitted:
+            try:
+                await code_field.press("Enter", timeout=5000)
+                submitted = True
+            except Exception:  # noqa: BLE001
+                submitted = False
+        if not submitted:
+            # не фатально: VK ID перерисовал экран — stage жив, /code повторяем
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)
+            raise HTTPException(
+                status_code=400,
+                detail="vk: не удалось нажать «Продолжить» (экран перерисовался). Повторите /code",
+            )
         for i in range(60):
             await asyncio.sleep(1.0)
             if i % 5 == 4:
@@ -475,18 +495,38 @@ async def act_password(inst: Any, password: str) -> dict:
         if qt is not None:
             qt.cancel()
             inst.qr_task = None
-        await pw_field.fill(password)
+        try:
+            await pw_field.fill(password, timeout=8000)
+        except Exception:  # noqa: BLE001
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)
+            raise HTTPException(status_code=400,
+                                detail="vk: поле пароля перерисовалось. Повторите /password")
         btn = await _find_field(page, "button:has-text('Продолжить')", timeout=3000)
         if btn is None:
             btn = await _find_field(page, "button:has-text('Войти'), button[type='submit']",
                                     timeout=2000)
-        try:
-            if btn is not None:
+        submitted = False
+        if btn is not None:
+            try:
                 await btn.click(timeout=5000)
-            else:
-                await pw_field.press("Enter")
-        except Exception:  # noqa: BLE001
-            await pw_field.press("Enter")
+                submitted = True
+            except Exception:  # noqa: BLE001
+                submitted = False
+        if not submitted:
+            try:
+                await pw_field.press("Enter", timeout=5000)
+                submitted = True
+            except Exception:  # noqa: BLE001
+                submitted = False
+        if not submitted:
+            # не фатально: VK ID перерисовал экран — stage жив, /password повторяем
+            if inst.stage == "awaiting_qr":
+                _start_qr_watch(inst, lctx)
+            raise HTTPException(
+                status_code=400,
+                detail="vk: не удалось нажать «Продолжить» (экран перерисовался). Повторите /password",
+            )
         for i in range(40):
             await asyncio.sleep(1.0)
             if i % 5 == 4:
