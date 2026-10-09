@@ -1,6 +1,10 @@
 services:
   maxgateway:
-    build: .
+    build:
+      context: .
+      args:
+        # Канал VK (личные страницы): playwright+chromium, ~500МБ. 0 — сборка без ВК.
+        INSTALL_VK: ${INSTALL_VK:-1}
     container_name: maxgateway
     restart: unless-stopped
     ports:

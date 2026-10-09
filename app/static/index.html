@@ -68,6 +68,7 @@
       <select id="newType" style="min-width:120px">
         <option value="max">MAX</option>
         <option value="telegram">Telegram</option>
+        <option value="vk" id="optVk" style="display:none">ВК (личная страница)</option>
       </select>
       <button onclick="createInst()">Добавить аккаунт</button>
     </div>
@@ -85,6 +86,9 @@
         <input id="phone" placeholder="Телефон, напр. +79990000000">
         <button onclick="doLogin()">Запросить код</button>
       </div>
+      <div class="row hidden" id="vkPwRow" style="margin-bottom:8px">
+        <input id="vkPw" placeholder="Пароль страницы ВК (не нужен при входе по QR)" type="password">
+      </div>
       <div class="row hidden" id="codeRow" style="margin-bottom:8px">
         <input id="code" placeholder="Код из SMS или Telegram" inputmode="numeric">
         <button onclick="doCode()">Подтвердить</button>
@@ -97,9 +101,9 @@
         <img id="qrImg" alt="QR" style="background:#fff;padding:8px;border-radius:8px;height:230px;width:230px">
       </div>
       <div class="row">
-        <button class="ghost" onclick="startQr()">Вход по QR (Telegram)</button>
+        <button class="ghost" onclick="startQr()">Вход по QR</button>
       </div>
-      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. Сессия сохраняется, повторный вход не нужен.</div>
+      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. ВК: QR — приложение ВК -> Профиль -> Настройки -> Вход по QR (или телефон+пароль+код). Сессия сохраняется, повторный вход не нужен.</div>
     </div>
 
     <div class="card">
@@ -174,6 +178,9 @@ async function loadOverview() {
     document.getElementById('keyCard').classList.add('hidden');
     document.getElementById('instCard').classList.remove('hidden');
     document.getElementById('panels').classList.remove('hidden');
+    api('/health').then(h => {
+      document.getElementById('optVk').style.display = h.vk ? '' : 'none';
+    }).catch(() => {});
     if (!r.instances.length) CUR = '';
     if (!CUR && r.instances.length) CUR = r.instances[0].name;
     if (!r.instances.some(i => i.name === CUR)) CUR = r.instances[0]?.name || '';
@@ -183,7 +190,7 @@ async function loadOverview() {
       const d = document.createElement('div');
       d.className = 'inst' + (i.name === CUR ? ' active' : '');
       const l = document.createElement('div');
-      const kind = i.type === 'telegram' ? 'Telegram' : 'MAX';
+      const kind = i.type === 'telegram' ? 'Telegram' : (i.type === 'vk' ? 'ВК' : 'MAX');
       l.innerHTML = `<div class="nm">${i.name}</div><div class="sub">${i.phone || 'без телефона'} · ${kind} · ${i.stage}</div>`;
       const b = document.createElement('span');
       badgeFor(b, i.stage, i.connected);
@@ -217,11 +224,12 @@ async function refresh() {
   if (!CUR) return;
   try {
     const s = await api(`/i/${CUR}/status`);
+    window.CURTYPE = s.type;
     badgeFor(document.getElementById('gBadge'), s.stage, s.connected);
     document.getElementById('curName').textContent = CUR;
     const kv = document.getElementById('statusKv'); kv.innerHTML = '';
     const rows = [
-      ['Тип', s.type === 'telegram' ? 'Telegram' : 'MAX'],
+      ['Тип', s.type === 'telegram' ? 'Telegram' : (s.type === 'vk' ? 'ВК' : 'MAX')],
       ['Состояние', s.stage], ['Телефон', s.phone || '—'],
       ['User ID', s.me || '—'], ['Соединение', s.connected ? 'онлайн' : 'офлайн'],
       ['Вебхук', s.webhook_url_set ? 'настроен' : 'не настроен'],
@@ -234,12 +242,18 @@ async function refresh() {
     }
     document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code');
     document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
+    document.getElementById('vkPwRow').classList.toggle('hidden', s.type !== 'vk');
     document.getElementById('qrRow').classList.toggle('hidden', s.stage !== 'awaiting_qr');
     if (s.stage === 'awaiting_qr') updateQrImg();
   } catch (e) { console.error(e); }
 }
 async function doLogin() {
-  try { const r = await api(`/i/${CUR}/login`, 'POST', { phone: document.getElementById('phone').value });
+  const body = { phone: document.getElementById('phone').value };
+  if (window.CURTYPE === 'vk') {
+    const pw = document.getElementById('vkPw').value;
+    if (pw) body.password = pw;
+  }
+  try { const r = await api(`/i/${CUR}/login`, 'POST', body);
         toast('Код запрошен: ' + r.phone); refresh(); }
   catch (e) { toast('Ошибка: ' + e.message); }
 }
@@ -255,7 +269,9 @@ async function startQr() {
   try {
     const r = await api(`/i/${CUR}/qr`, 'POST');
     if (r.stage === 'authorized') { toast('Уже авторизован'); refresh(); return; }
-    toast('Отсканируйте QR: Telegram -> Настройки -> Устройства -> Подключить устройство', 6000);
+    toast(window.CURTYPE === 'vk'
+      ? 'Отсканируйте QR: приложение ВК -> Профиль -> Настройки -> Вход по QR'
+      : 'Отсканируйте QR: Telegram -> Настройки -> Устройства -> Подключить устройство', 6000);
     updateQrImg(); refresh();
   } catch (e) { toast('Ошибка: ' + e.message); }
 }

@@ -46,13 +46,16 @@ except Exception as _tg_err:  # noqa: BLE001
     log.warning("Telegram adapter unavailable: %s", _tg_err)
 
 # VK-адаптер (личные страницы, web_token + playwright-профиль).
+# Требует playwright в образе; в сборке без VK (INSTALL_VK=0) канал выключен.
 VK = None
 try:
     try:
         import vk as VK
     except ImportError:
         from app import vk as VK
+    import playwright.async_api  # noqa: F401
 except Exception as _vk_err:  # noqa: BLE001
+    VK = None
     log.warning("VK adapter unavailable: %s", _vk_err)
 
 API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
@@ -864,6 +867,11 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
     itype = (body.type or "max").strip().lower()
     if itype not in ("max", "telegram", "vk"):
         raise HTTPException(status_code=400, detail="type: max | telegram | vk")
+    if itype == "vk" and VK is None:
+        raise HTTPException(
+            status_code=503,
+            detail="vk: канал не входит в эту сборку (пересоберите с INSTALL_VK=1)",
+        )
     if name in INSTANCES:
         raise HTTPException(status_code=409, detail="instance already exists")
     inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,

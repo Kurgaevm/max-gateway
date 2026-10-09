@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Установщик MAX Шлюза. Запуск:
 #   curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
-# Сразу с доменом (неинтерактивно):
-#   MAXGW_DOMAIN=max.example.ru curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
+# Сразу с доменом и VK-каналом (неинтерактивно):
+#   MAXGW_DOMAIN=max.example.ru INSTALL_VK=1 curl -fsSL https://raw.githubusercontent.com/Kurgaevm/max-gateway/main/install.sh | bash
 set -euo pipefail
 
 REPO="https://github.com/Kurgaevm/max-gateway.git"
@@ -35,6 +35,19 @@ MAXGW_REG_FIRST=Salon
 MAXGW_REG_LAST=Bot
 EOF
   say "Создан .env со свежим API-ключом."
+fi
+
+# --- Каналы: VK (личные страницы ВКонтакте) тянет в образ браузер (+~500МБ).
+# На клиентских серверах обычно не нужен. Неинтерактивно: INSTALL_VK=1|0.
+if ! grep -q '^INSTALL_VK=' .env 2>/dev/null; then
+  VK_ANSWER="${INSTALL_VK:-}"
+  if [ -z "$VK_ANSWER" ] && [ -r /dev/tty ]; then
+    printf 'Включить канал VK — личные страницы ВКонтакте (браузер в образе, +~500МБ)? [y/N]: '
+    IFS= read -r REPLY_VK < /dev/tty || REPLY_VK=""
+    case "$REPLY_VK" in [yY]* ) VK_ANSWER=1;; * ) VK_ANSWER=0;; esac
+  fi
+  echo "INSTALL_VK=${VK_ANSWER:-0}" >> .env
+  say "Канал VK: $( [ "${VK_ANSWER:-0}" = 1 ] && echo 'включён' || echo 'выключен (сборка без ВК)' )"
 fi
 
 # --- Домен (опционально): HTTPS-доступ снаружи через Caddy из стека selfhost-ai ---
