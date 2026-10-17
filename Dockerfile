@@ -6,6 +6,10 @@ ARG INSTALL_VK=1
 
 WORKDIR /app
 
+# ffmpeg: конвертация голосовых (ogg/oga -> mp3) для STT-провайдеров без поддержки ogg
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
     "maxapi-python>=2.2,<3" \
     fastapi \
@@ -13,7 +17,8 @@ RUN pip install --no-cache-dir \
     httpx \
     "telethon>=1.36,<2" \
     qrcode \
-    pillow
+    pillow \
+    python-multipart
 
 # Браузер для VK-инстансов (вход и ротация web_token, профиль в /data)
 RUN if [ "$INSTALL_VK" = "1" ]; then \
