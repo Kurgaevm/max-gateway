@@ -20,7 +20,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -57,6 +57,18 @@ try:
 except Exception as _vk_err:  # noqa: BLE001
     VK = None
     log.warning("VK adapter unavailable: %s", _vk_err)
+
+# Хранилище сообщений (SQLite, data/messages.db): полная переписка всех инстансов.
+STORE = None
+try:
+    try:
+        import store as STORE  # запуск из каталога app
+    except ImportError:
+        from app import store as STORE  # запуск из корня репозитория
+    STORE.init()
+except Exception as _store_err:  # noqa: BLE001
+    STORE = None
+    log.warning("message store unavailable: %s", _store_err)
 
 API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
 GLOBAL_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
@@ -432,6 +444,11 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     }
     inst.last_incoming = payload
     inst.recent.append({"ts": time.time(), "payload": payload})
+    if STORE is not None:
+        try:
+            STORE.record_payload(inst.name, inst.type, payload)
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] store write failed", inst.name)
     preview = (text or (voice is not None and "<голосовое>") or "<вложение>")
     log.info("[%s] incoming from %s: %s", inst.name, payload["senderData"]["senderId"],
              str(preview)[:120])
@@ -709,7 +726,7 @@ class PasswordBody(BaseModel):
 class SendTextBody(BaseModel):
     message: str
     phone: Optional[str] = None
-    chat_id: Optional[int] = None
+    chat_id: Optional[Union[int, str]] = None
 
 
 class CreateInstBody(BaseModel):
@@ -830,9 +847,21 @@ async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
             res = await res
         chat_id = res  # уже raw chat_id, разрешать не нужно
     else:
-        chat_id = resolve_chat_id(inst, chat_id)
+        chat_id = resolve_chat_id(inst, int(chat_id))
     sent = await inst.client.send_message(chat_id=chat_id, text=body.message)
     mid = getattr(sent, "id", None)
+    if STORE is not None and mid is not None:
+        try:
+            raw = int(chat_id)
+            me_id = inst.me
+            api_key = (raw ^ int(me_id)) if (me_id is not None and raw > 0) else raw
+            mt = getattr(sent, "time", None)
+            ts = int(mt / 1000) if isinstance(mt, (int, float)) and mt > 10**12 \
+                else int(time.time())
+            STORE.record(inst.name, str(api_key), str(mid), ts, "out",
+                         kind="text", text=body.message[:4000])
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] store write (outgoing) failed", inst.name)
     return {"ok": True, "instance": inst.name, "chatId": str(chat_id),
             "messageId": str(mid) if mid is not None else None}
 
@@ -1053,15 +1082,191 @@ async def i_topics(name: str, query: str = "", limit: int = 200,
 @app.get("/i/{name}/history")
 async def i_history(name: str, query: str = "", limit: int = 20, topic_id: Optional[int] = None,
                     x_api_key: str = Header(default="")):
-    """Telegram/VK: последние сообщения чата (query: @username, ссылка, chat_id/peer_id)."""
+    """Последние сообщения чата (query: @username, ссылка, chat_id/peer_id)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
+    if inst.type == "max":
+        return await max_read_history(inst, query, limit)
     if inst.type == "telegram":
         require_tg()
         return await TG.read_history(inst, query, limit, topic_id)
     if inst.type == "vk":
         return await VK.read_history(inst, query, limit)
     raise HTTPException(status_code=501, detail="history: только telegram/vk-инстансы")
+
+
+# ---------------------------------------------------------------- message store
+
+def _max_api_chat_key(inst: Inst, raw: int) -> int:
+    """Личный чат MAX: api-ключ = user_id собеседника (raw = me ^ peer)."""
+    me_id = inst.me
+    return (raw ^ int(me_id)) if (me_id is not None and raw > 0) else raw
+
+
+def _max_ts(m: Any) -> int:
+    mt = getattr(m, "time", None)
+    if isinstance(mt, (int, float)) and mt > 10**12:
+        return int(mt / 1000)
+    return int(time.time())
+
+
+async def max_read_history(inst: Inst, query: str, limit: int = 20) -> dict:
+    """MAX: последние сообщения чата (+ запись в хранилище)."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    q = (query or "").strip()
+    if not q or not re.fullmatch(r"-?\d+", q):
+        raise HTTPException(status_code=400,
+                            detail="max history: query = chat_id (число)")
+    raw = resolve_chat_id(inst, int(q))
+    limit = max(1, min(int(limit or 20), 500))
+    msgs = await inst.client.fetch_history(chat_id=raw, backward=limit)
+    api_key = _max_api_chat_key(inst, raw)
+    items = []
+    me_id = inst.me
+    for m in msgs:
+        mid = getattr(m, "id", None)
+        if mid is None:
+            continue
+        sender = getattr(m, "sender", None)
+        out = me_id is not None and sender is not None and int(sender) == int(me_id)
+        text = (getattr(m, "text", "") or "")[:4000]
+        attaches = list(getattr(m, "attaches", None) or [])
+        kind = "text" if (text or not attaches) else attach_type(attaches[0]).lower()
+        sname, _ = sender_info(inst.client, sender)
+        items.append({"id": str(mid), "ts": _max_ts(m), "out": out,
+                      "from": sname, "text": text, "kind": kind})
+        if STORE is not None:
+            STORE.record(inst.name, str(api_key), str(mid), _max_ts(m),
+                         "out" if out else "in",
+                         sender_id=str(sender) if sender is not None else "",
+                         sender_name=sname or "", kind=kind, text=text)
+    items.reverse()
+    return {"ok": True, "instance": inst.name, "chatId": str(api_key),
+            "items": items}
+
+
+async def max_sync_history(inst: Inst, per_chat: int = 200,
+                           chats_cap: int = 50) -> dict:
+    """MAX: импорт истории последних чатов аккаунта в хранилище."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    per_chat = max(1, min(int(per_chat or 200), 500))
+    chats_cap = max(1, min(int(chats_cap or 50), 100))
+    chats = await inst.client.fetch_chats()
+    synced = total = 0
+    for ch in chats[:chats_cap]:
+        raw = getattr(ch, "id", None)
+        if raw is None:
+            continue
+        raw = int(raw)
+        title = getattr(ch, "title", None) or getattr(ch, "name", None)
+        ctype = "group" if raw < 0 else "user"
+        chat_key = str(_max_api_chat_key(inst, raw))
+        if STORE is not None:
+            STORE.touch_chat(inst.name, chat_key, title=title, ctype=ctype)
+        try:
+            msgs = await inst.client.fetch_history(chat_id=raw, backward=per_chat)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] sync chat %s failed: %s", inst.name, raw, e)
+            continue
+        me_id = inst.me
+        for m in msgs:
+            mid = getattr(m, "id", None)
+            if mid is None:
+                continue
+            sender = getattr(m, "sender", None)
+            out = me_id is not None and sender is not None \
+                and int(sender) == int(me_id)
+            text = (getattr(m, "text", "") or "")[:4000]
+            attaches = list(getattr(m, "attaches", None) or [])
+            kind = "text" if (text or not attaches) else attach_type(attaches[0]).lower()
+            sname, _ = sender_info(inst.client, sender)
+            if STORE is not None:
+                STORE.record(inst.name, chat_key, str(mid), _max_ts(m),
+                             "out" if out else "in",
+                             sender_id=str(sender) if sender is not None else "",
+                             sender_name=sname or "", kind=kind, text=text,
+                             chat_title=(sname if out else (sname or title)),
+                             ctype=ctype)
+            total += 1
+        synced += 1
+        await asyncio.sleep(0.6)  # анти-бан: пауза между чатами
+    return {"ok": True, "instance": inst.name, "chats": synced,
+            "messages": total}
+
+
+@app.get("/admin/chats")
+async def admin_chats(insts: str = "", q: str = "", limit: int = 200,
+                      unread: int = 0, x_api_key: str = Header(default="")):
+    """Список чатов всех инстансов из хранилища (для вкладки Сообщения)."""
+    require_admin(x_api_key)
+    if STORE is None:
+        raise HTTPException(status_code=503, detail="message store unavailable")
+    names = [s for s in insts.split(",") if s] or None
+    return {"items": STORE.list_chats(names, q=q, limit=min(limit, 500),
+                                      unread_only=bool(unread))}
+
+
+@app.get("/admin/thread")
+async def admin_thread(inst: str, chat: str, before: Optional[int] = None,
+                       limit: int = 60, read: int = 0,
+                       x_api_key: str = Header(default="")):
+    """Переписка чата из хранилища (старые -> новые), пагинация через before."""
+    require_admin(x_api_key)
+    if STORE is None:
+        raise HTTPException(status_code=503, detail="message store unavailable")
+    get_inst(inst)
+    items = STORE.get_thread(inst, chat, before_ts=before,
+                             limit=min(limit, 200))
+    if read:
+        STORE.mark_read(inst, chat)
+    return {"items": items}
+
+
+@app.get("/admin/msgsearch")
+async def admin_msgsearch(q: str, insts: str = "", limit: int = 60,
+                          x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    if STORE is None:
+        raise HTTPException(status_code=503, detail="message store unavailable")
+    names = [s for s in insts.split(",") if s] or None
+    return {"items": STORE.search_messages(names, q=q, limit=min(limit, 200))}
+
+
+@app.get("/admin/store/stats")
+async def admin_store_stats(x_api_key: str = Header(default="")):
+    require_admin(x_api_key)
+    return STORE.stats() if STORE is not None else {"chats": {}, "messages": {}}
+
+
+class SyncBody(BaseModel):
+    types: str = "user,group"   # telegram: user | group | channel
+    dialogs: int = 50
+    per_chat: int = 200
+
+
+@app.post("/i/{name}/syncHistory")
+async def i_sync_history(name: str, body: Optional[SyncBody] = None,
+                         x_api_key: str = Header(default="")):
+    """Импорт истории переписки аккаунта в хранилище (Telegram/MAX/VK)."""
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    if STORE is None:
+        raise HTTPException(status_code=503, detail="message store unavailable")
+    b = body or SyncBody()
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.sync_history(inst, types=b.types,
+                                     dialogs_limit=b.dialogs,
+                                     per_chat=b.per_chat)
+    if inst.type == "max":
+        return await max_sync_history(inst, per_chat=b.per_chat,
+                                      chats_cap=b.dialogs)
+    if inst.type == "vk" and VK is not None:
+        return await VK.sync_history(inst, dialogs_limit=b.dialogs,
+                                     per_chat=b.per_chat)
+    raise HTTPException(status_code=501, detail="syncHistory: недоступно")
 
 
 # ---------------------------------------------------------------- legacy routes (default instance)

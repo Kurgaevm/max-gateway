@@ -28,6 +28,11 @@ from telethon import TelegramClient, errors, events, utils
 
 log = logging.getLogger("maxgw.tg")
 
+try:
+    import store as STORE  # запуск из каталога app
+except ImportError:
+    from app import store as STORE  # запуск из корня репозитория
+
 WORK_DIR = os.environ.get("WORK_DIR", "/data")
 SESSIONS_DIR = os.path.join(WORK_DIR, "sessions")
 TG_API_ID = int(os.environ.get("TG_API_ID", "0") or 0)
@@ -413,6 +418,10 @@ async def handle_incoming(inst: Any, event: Any) -> None:
     }
     inst.last_incoming = payload
     inst.recent.append({"ts": time.time(), "payload": payload})
+    try:
+        STORE.record_payload(inst.name, "telegram", payload)
+    except Exception:  # noqa: BLE001
+        log.exception("[%s] store write failed", inst.name)
     preview = text or (msg.voice is not None and "<голосовое>") or "<вложение>"
     log.info("[%s] tg incoming from %s: %s", inst.name, sid, str(preview)[:120])
 
@@ -452,6 +461,12 @@ async def act_send_text(inst: Any, body: Any) -> dict:
         ) from e
     except errors.RPCError as e:
         raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
+    try:
+        STORE.record(inst.name, str(m.chat_id), str(m.id),
+                     int(m.date.timestamp()) if m.date else int(time.time()),
+                     "out", kind="text", text=body.message[:4000])
+    except Exception:  # noqa: BLE001
+        log.exception("[%s] store write (outgoing) failed", inst.name)
     return {
         "ok": True,
         "instance": inst.name,
@@ -571,6 +586,7 @@ async def read_history(inst: Any, query: str, limit: int = 20, topic_id: Optiona
     except ValueError as e:
         raise HTTPException(status_code=404, detail=f"entity not found: {query}") from e
     items = []
+    ent_info: Optional[dict] = None
     kwargs: dict = {"limit": limit}
     if topic_id:
         kwargs["reply_to"] = int(topic_id)
@@ -611,8 +627,84 @@ async def read_history(inst: Any, query: str, limit: int = 20, topic_id: Optiona
             "previewUrl": preview_url,
             "buttons": buttons,
         })
+        # прочитанное уходит в хранилище: вкладка «Сообщения» строится из него
+        try:
+            if ent_info is None:
+                ent_info = _entity_info(entity)
+                STORE.touch_chat(inst.name, ent_info["chatId"],
+                                 title=ent_info.get("title"),
+                                 ctype=ent_info.get("type"),
+                                 username=ent_info.get("username"),
+                                 phone=ent_info.get("phone"))
+            STORE.record(inst.name, ent_info["chatId"], str(m.id),
+                         int(m.date.timestamp()) if m.date else int(time.time()),
+                         "out" if m.out else "in",
+                         sender_id=str(m.from_id) if m.from_id is not None else "",
+                         sender_name=name or "",
+                         kind=("file" if getattr(m, "file", None) else
+                               ("voice" if getattr(m, "voice", None) else "text")),
+                         text=(m.text or "")[:4000])
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] store write (history) failed", inst.name)
     items.reverse()
     return {"ok": True, "instance": inst.name, "entity": _entity_info(entity), "items": items}
+
+
+async def sync_history(inst: Any, types: str = "user,group",
+                       dialogs_limit: int = 50, per_chat: int = 200) -> dict:
+    """Импорт истории диалогов аккаунта в хранилище (кнопка «Импорт истории»)."""
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    want = {t.strip() for t in (types or "user,group").split(",") if t.strip()}
+    dialogs_limit = max(1, min(int(dialogs_limit or 50), 100))
+    per_chat = max(1, min(int(per_chat or 200), 500))
+    synced = total = 0
+    async for d in inst.client.iter_dialogs(limit=dialogs_limit):
+        e = d.entity
+        if getattr(e, "broadcast", None):
+            kind = "channel"
+        elif getattr(e, "megagroup", None):
+            kind = "group"
+        elif hasattr(e, "first_name"):
+            kind = "user"
+        else:
+            kind = "other"
+        if kind not in want:
+            continue
+        chat_key = str(d.id)
+        ph = getattr(e, "phone", None)
+        STORE.touch_chat(inst.name, chat_key, title=d.name, ctype=kind,
+                         username=getattr(e, "username", None),
+                         phone=("+" + str(ph)) if ph else None)
+        count = 0
+        async for m in inst.client.iter_messages(d.entity, limit=per_chat):
+            if m.id is None:
+                continue
+            sender = m.sender
+            name = None
+            if sender is not None:
+                name = getattr(sender, "title", None) or " ".join(
+                    x for x in (getattr(sender, "first_name", None),
+                                getattr(sender, "last_name", None)) if x) or None
+            try:
+                STORE.record(inst.name, chat_key, str(m.id),
+                             int(m.date.timestamp()) if m.date else int(time.time()),
+                             "out" if m.out else "in",
+                             sender_id=str(m.from_id) if m.from_id is not None else "",
+                             sender_name=name or "",
+                             kind=("voice" if getattr(m, "voice", None) else
+                                   ("file" if getattr(m, "file", None) else "text")),
+                             text=(m.text or "")[:4000],
+                             chat_title=(d.name if kind != "user" else
+                                         (name if not m.out else None)))
+            except Exception:  # noqa: BLE001
+                pass
+            count += 1
+        total += count
+        synced += 1
+        await asyncio.sleep(0.3)  # мягкий темп к Telegram
+    return {"ok": True, "instance": inst.name, "chats": synced,
+            "messages": total}
 
 
 async def get_file(inst: Any, chat_id: int, message_id: int) -> Response:

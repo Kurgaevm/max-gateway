@@ -33,6 +33,11 @@ from fastapi import HTTPException
 
 log = logging.getLogger("maxgw.vk")
 
+try:
+    import store as STORE  # запуск из каталога app
+except ImportError:
+    from app import store as STORE  # запуск из корня репозитория
+
 WORK_DIR = os.environ.get("WORK_DIR", "/data")
 SESSIONS_DIR = os.path.join(WORK_DIR, "sessions")
 PROFILES_DIR = os.path.join(WORK_DIR, "vk_profiles")
@@ -728,6 +733,11 @@ async def act_send_text(inst: Any, body: Any) -> dict:
         inst.vk_last_send = time.time()
         r = await api(inst, "messages.send", peer_id=int(chat_id),
                       message=body.message, random_id=random.getrandbits(31))
+    try:
+        STORE.record(inst.name, str(chat_id), str(r), int(time.time()), "out",
+                     kind="text", text=body.message[:4000])
+    except Exception:  # noqa: BLE001
+        log.exception("[%s] store write (outgoing) failed", inst.name)
     return {"ok": True, "instance": inst.name, "chatId": str(chat_id), "messageId": str(r)}
 
 
@@ -776,12 +786,63 @@ async def read_history(inst: Any, query: str, limit: int = 20) -> dict:
         peer = (await resolve_entity(inst, peer))["chatId"]
     limit = max(1, min(int(limit or 20), 100))
     r = await api(inst, "messages.getHistory", peer_id=int(peer), count=limit)
-    items = [{
-        "id": m.get("id"), "out": bool(m.get("out")),
-        "from": m.get("from_id"), "text": m.get("text", ""),
-        "ts": m.get("date"),
-    } for m in r.get("items", [])]
+    items = []
+    for m in r.get("items", []):
+        items.append({
+            "id": m.get("id"), "out": bool(m.get("out")),
+            "from": m.get("from_id"), "text": m.get("text", ""),
+            "ts": m.get("date"),
+        })
+        try:
+            STORE.record(inst.name, str(peer), str(m.get("id")),
+                         int(m.get("date") or time.time()),
+                         "out" if m.get("out") else "in",
+                         sender_id=str(m.get("from_id") or ""),
+                         kind="text", text=(m.get("text") or "")[:4000])
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, "instance": inst.name, "chatId": peer, "items": items}
+
+
+async def sync_history(inst: Any, dialogs_limit: int = 50,
+                       per_chat: int = 100) -> dict:
+    """Импорт истории диалогов ВК в хранилище."""
+    if inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    dialogs_limit = max(1, min(int(dialogs_limit or 50), 100))
+    per_chat = max(1, min(int(per_chat or 100), 200))
+    r = await api(inst, "messages.getConversations", count=dialogs_limit)
+    synced = total = 0
+    for c in r.get("items", []):
+        conv = c.get("conversation", {})
+        peer = conv.get("peer", {}).get("id")
+        if peer is None:
+            continue
+        title = (conv.get("chat_settings") or {}).get("title") or str(peer)
+        ctype = "group" if int(peer) > 2000000000 else "user"
+        STORE.touch_chat(inst.name, str(peer), title=title, ctype=ctype)
+        try:
+            h = await api(inst, "messages.getHistory", peer_id=int(peer),
+                          count=per_chat)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] sync peer %s failed: %s", inst.name, peer, e)
+            continue
+        for m in h.get("items", []):
+            try:
+                STORE.record(inst.name, str(peer), str(m.get("id")),
+                             int(m.get("date") or time.time()),
+                             "out" if m.get("out") else "in",
+                             sender_id=str(m.get("from_id") or ""),
+                             kind="text", text=(m.get("text") or "")[:4000],
+                             chat_title=title if ctype == "group" else None,
+                             ctype=ctype)
+            except Exception:  # noqa: BLE001
+                pass
+            total += 1
+        synced += 1
+        await asyncio.sleep(1.0)  # анти-бан: пауза между чатами
+    return {"ok": True, "instance": inst.name, "chats": synced,
+            "messages": total}
 
 
 # ---------------------------------------------------------------- longpoll
@@ -835,6 +896,10 @@ async def _emit_incoming(inst: Any, msg: dict) -> None:
     }
     inst.last_incoming = payload
     inst.recent.append({"ts": time.time(), "payload": payload})
+    try:
+        STORE.record_payload(inst.name, "vk", payload)
+    except Exception:  # noqa: BLE001
+        log.exception("[%s] store write failed", inst.name)
     log.info("[%s] vk incoming from %s: %s", inst.name, msg.get("from_id"),
              str(msg.get("text", ""))[:120])
     hook = inst.webhook_url or os.environ.get("WEBHOOK_URL", "")

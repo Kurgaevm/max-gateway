@@ -3,382 +3,629 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Шлюз MAX + Telegram</title>
+<title>MAX Шлюз · Сообщения</title>
 <style>
   :root {
-    --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e9ef;
-    --muted: #8b93a3; --accent: #4f8cff; --ok: #3ecf8e; --warn: #f5a623; --err: #ff5c5c;
+    --bg:#eef1f5; --win:#fff; --line:#e4e7ee; --ink:#20263b; --mut:#7a8299;
+    --soft:#98a0b5; --dark:#1c2440; --dark2:#3b4a7d; --sel:#eef2ff;
+    --accent:#1fa860; --in:#fff; --out:#dde7ff;
+    --maxbg:#e8defb; --maxtx:#6b3fd4; --tgbg:#d8f1ec; --tgtx:#0e8a74; --vkbg:#dbe7fb; --vktx:#3b6bbf;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px 16px 60px; }
-  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
-  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
-  .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); }
-  .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
-  .badge.err { background: rgba(255,92,92,.15); color: var(--err); }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .card h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  input, select { flex: 1; min-width: 150px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 10px 12px; font-size: 15px; }
-  input:focus, select:focus { outline: none; border-color: var(--accent); }
-  button { background: var(--accent); border: none; border-radius: 8px; color: #fff; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
-  button:hover { filter: brightness(1.1); }
-  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
-  button.danger { background: transparent; border: 1px solid rgba(255,92,92,.4); color: var(--err); }
-  .kv { display: grid; grid-template-columns: 180px 1fr; gap: 6px 12px; font-size: 14px; }
-  .kv b { color: var(--muted); font-weight: 500; }
-  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
-  .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; }
-  .cl-row { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
-  .cl-row:hover { border-color: var(--accent); }
-  .cl-nm { font-weight: 600; font-size: 14px; }
-  .cl-txt { color: var(--muted); font-size: 13px; margin-top: 2px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .cl-r { text-align: right; flex: none; font-size: 13px; }
-  .cl-cnt { color: var(--muted); font-size: 12px; }
-  .msg .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; word-break: break-word; }
-  .msg .txt { word-break: break-word; }
-  .inst { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
-  .inst:hover { border-color: var(--accent); }
-  .inst.active { border-color: var(--accent); }
-  .inst .nm { font-weight: 600; }
-  .inst .sub { color: var(--muted); font-size: 13px; }
-  code { background: var(--bg); border: 1px solid var(--line); padding: 2px 6px; border-radius: 6px; font-size: 13px; word-break: break-all; }
-  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; display: none; font-size: 14px; max-width: 90vw; }
-  .hidden { display: none !important; }
+  * { box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI', system-ui, -apple-system, sans-serif; }
+  body { background:var(--bg); color:var(--ink); padding:0 0 40px; }
+  button { cursor:pointer; }
+
+  .topbar { display:flex; align-items:center; gap:18px; padding:0 20px; height:52px; background:var(--dark); color:#fff; position:sticky; top:0; z-index:20; }
+  .logo { font-weight:700; font-size:15px; }
+  .tabs { display:flex; gap:4px; margin-left:6px; height:100%; }
+  .tab { display:flex; align-items:center; padding:0 14px; border-radius:0; font-size:13px; color:#aab3d0; background:none; border:none; border-bottom:2.5px solid transparent; }
+  .tab.active { color:#fff; font-weight:600; border-bottom-color:#7ee0a3; }
+  .whoami { margin-left:auto; font-size:12px; color:#aab3d0; display:flex; align-items:center; gap:8px; }
+  .badge { font-size:12px; padding:3px 10px; border-radius:20px; font-weight:600; }
+  .badge.ok { background:rgba(62,207,142,.2); color:#7ee0a3; }
+  .badge.warn { background:rgba(245,166,35,.2); color:#ffd27e; }
+  .badge.err { background:rgba(255,92,92,.2); color:#ff9c9c; }
+
+  .page { display:none; padding:20px; max-width:1280px; margin:0 auto; }
+  .page.active { display:block; }
+
+  /* ---------- Инстансы (старый функционал, светлый стиль) ---------- */
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; }
+  .card { background:var(--win); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { font-size:13px; color:var(--mut); text-transform:uppercase; letter-spacing:.5px; margin-bottom:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  input, select { flex:1; min-width:140px; background:#fff; border:1px solid #d6dbe6; border-radius:8px; color:var(--ink); padding:9px 12px; font-size:14px; }
+  input:focus, select:focus { outline:none; border-color:var(--dark2); }
+  .btn { background:var(--dark); border:none; border-radius:8px; color:#fff; padding:9px 16px; font-size:13px; font-weight:600; }
+  .btn:hover { background:var(--dark2); }
+  .btn.ghost { background:#fff; border:1px solid #d6dbe6; color:#4a5470; font-weight:500; }
+  .btn.danger { background:#fff; border:1px solid rgba(220,60,60,.4); color:#d43c3c; font-weight:500; }
+  .hint { color:var(--mut); font-size:12.5px; margin-top:8px; line-height:1.5; }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:6px 12px; font-size:13.5px; }
+  .kv b { color:var(--mut); font-weight:500; }
+  .inst { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; }
+  .inst:hover { border-color:var(--dark2); }
+  .inst.active { border-color:var(--dark); background:var(--sel); }
+  .inst .nm { font-weight:600; font-size:14px; }
+  .inst .sub { color:var(--mut); font-size:12.5px; }
+  .msg { border:1px solid var(--line); border-radius:10px; padding:9px 12px; margin-bottom:7px; font-size:13.5px; }
+  .msg .meta { color:var(--soft); font-size:12px; margin-bottom:3px; word-break:break-word; }
+  code { background:#f1f3f8; border:1px solid var(--line); padding:1px 6px; border-radius:6px; font-size:12.5px; word-break:break-all; }
+  .hidden { display:none !important; }
+
+  /* ---------- Сообщения ---------- */
+  .filters { display:flex; gap:8px; padding:12px 0; align-items:center; flex-wrap:wrap; }
+  .chip { padding:6px 14px; border-radius:999px; font-size:12.5px; background:#fff; border:1px solid #d6dbe6; color:#4a5470; }
+  .chip.on { background:var(--dark); color:#fff; border-color:var(--dark); }
+  .syncinfo { margin-left:auto; font-size:12px; color:var(--mut); display:flex; gap:10px; align-items:center; }
+
+  .msglayout { display:flex; gap:0; height:calc(100vh - 170px); min-height:520px; background:var(--win); border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 6px 24px rgba(20,30,60,.08); }
+
+  .chats { width:330px; border-right:1px solid var(--line); display:flex; flex-direction:column; flex:none; }
+  .searchbox { margin:12px; display:flex; gap:6px; }
+  .searchbox input { min-width:0; }
+  .chatlist { overflow-y:auto; flex:1; }
+  .chat { display:flex; gap:11px; padding:11px 14px; align-items:center; cursor:pointer; }
+  .chat:hover { background:#f6f8fc; }
+  .chat.sel { background:var(--sel); }
+  .avatar { width:42px; height:42px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:13px; color:#fff; font-weight:600; }
+  .crow { flex:1; min-width:0; }
+  .cname { font-size:13.5px; font-weight:600; color:var(--ink); display:flex; align-items:center; gap:6px; white-space:nowrap; overflow:hidden; }
+  .cname .t { overflow:hidden; text-overflow:ellipsis; }
+  .chbadge { font-size:9.5px; font-weight:700; padding:2px 6px; border-radius:4px; letter-spacing:.4px; flex:none; }
+  .chbadge.max { background:var(--maxbg); color:var(--maxtx); }
+  .chbadge.tg { background:var(--tgbg); color:var(--tgtx); }
+  .chbadge.vk { background:var(--vkbg); color:var(--vktx); }
+  .lastmsg { font-size:12.5px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
+  .cright { text-align:right; flex:none; }
+  .time { font-size:11px; color:var(--soft); }
+  .unread { background:var(--accent); color:#fff; font-size:10.5px; font-weight:700; border-radius:999px; padding:1px 7px; margin-top:5px; display:inline-block; }
+
+  .thread { flex:1; display:flex; flex-direction:column; min-width:0; background:#f7f9fc; }
+  .thead { display:flex; align-items:center; gap:12px; padding:11px 18px; background:#fff; border-bottom:1px solid var(--line); }
+  .tname { font-weight:700; font-size:14.5px; display:flex; gap:8px; align-items:center; }
+  .tsub { font-size:12px; color:var(--mut); margin-top:2px; }
+  .tactions { margin-left:auto; display:flex; gap:8px; }
+  .msgs { flex:1; padding:14px 22px; overflow-y:auto; }
+  .loadolder { text-align:center; margin-bottom:10px; }
+  .loadolder button { font-size:12px; color:#4a5470; background:#fff; border:1px solid #d6dbe6; padding:6px 14px; border-radius:999px; }
+  .day { text-align:center; margin:12px 0; }
+  .day span { font-size:11px; color:var(--soft); background:#e8ebf2; padding:3px 10px; border-radius:999px; }
+  .mrow { display:flex; margin-bottom:8px; }
+  .mrow.out { justify-content:flex-end; }
+  .bubble { max-width:64%; padding:9px 13px; border-radius:14px; font-size:13.5px; line-height:1.45; word-break:break-word; white-space:pre-wrap; }
+  .mrow.in .bubble { background:var(--in); border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .mrow.out .bubble { background:var(--out); border-bottom-right-radius:4px; }
+  .meta { font-size:10.5px; color:var(--soft); margin-top:4px; text-align:right; }
+  .att { display:flex; gap:8px; align-items:center; background:rgba(108,63,212,.06); border:1px solid rgba(108,63,212,.18); padding:7px 10px; border-radius:9px; margin-bottom:4px; font-size:12.5px; }
+  .att .dl { color:var(--dark2); font-weight:600; cursor:pointer; text-decoration:underline; background:none; border:none; font-size:12.5px; padding:0; }
+  .composer { display:flex; gap:10px; padding:12px 18px; background:#fff; border-top:1px solid var(--line); align-items:center; }
+  .composer input { flex:1; }
+  .empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--soft); font-size:14px; flex-direction:column; gap:10px; }
+
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--dark); color:#fff; border:none; padding:10px 18px; border-radius:10px; display:none; font-size:13.5px; max-width:90vw; z-index:50; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+
+  /* ---------- Вебхуки ---------- */
+  .hookrow { display:flex; gap:8px; margin-bottom:10px; align-items:center; }
+  .hookrow .nm { width:130px; font-weight:600; font-size:13.5px; flex:none; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Шлюз MAX + Telegram <span id="gBadge" class="badge warn">…</span></h1>
 
-  <div class="card" id="keyCard">
+<div class="topbar">
+  <div class="logo">MAX Шлюз</div>
+  <div class="tabs">
+    <button class="tab" data-tab="inst" onclick="showTab('inst')">Инстансы</button>
+    <button class="tab active" data-tab="msg" onclick="showTab('msg')">💬 Сообщения</button>
+    <button class="tab" data-tab="hooks" onclick="showTab('hooks')">Вебхуки</button>
+  </div>
+  <div class="whoami"><span id="gBadge" class="badge warn">…</span><span id="connInfo"></span></div>
+</div>
+
+<div class="page" id="page-inst">
+  <div id="keyCard" class="card" style="max-width:560px;margin:0 auto 14px">
     <h2>Подключение</h2>
     <div class="row">
       <input id="adminKey" placeholder="Админ-ключ (MAXGW_API_KEY из .env)" type="password">
-      <button onclick="saveKey()">Войти</button>
+      <button class="btn" onclick="saveKey()">Войти</button>
     </div>
   </div>
 
-  <div class="card" id="instCard">
-    <h2>Аккаунты (инстансы)</h2>
-    <div id="instList"></div>
-    <div class="row" style="margin-top:10px">
-      <input id="newName" placeholder="Имя нового инстанса, напр. salon1" style="min-width:120px">
-      <select id="newType" style="min-width:120px">
-        <option value="max">MAX</option>
-        <option value="telegram">Telegram</option>
-        <option value="vk" id="optVk" style="display:none">ВК (личная страница)</option>
-      </select>
-      <button onclick="createInst()">Добавить аккаунт</button>
-    </div>
-  </div>
+  <div id="instPanels" class="hidden">
+    <div class="grid2">
+      <div class="card">
+        <h2>Аккаунты (инстансы)</h2>
+        <div id="instList"></div>
+        <div class="row" style="margin-top:10px">
+          <input id="newName" placeholder="Имя нового инстанса" style="min-width:120px">
+          <select id="newType" style="min-width:110px">
+            <option value="max">MAX</option>
+            <option value="telegram">Telegram</option>
+            <option value="vk" id="optVk" style="display:none">ВК</option>
+          </select>
+          <button class="btn" onclick="createInst()">Добавить</button>
+        </div>
+      </div>
 
-  <div id="panels">
-    <div class="card">
-      <h2>Статус: <span id="curName">—</span></h2>
-      <div class="kv" id="statusKv"></div>
-    </div>
+      <div class="card">
+        <h2>Статус: <span id="curName">—</span></h2>
+        <div class="kv" id="statusKv"></div>
+      </div>
 
-    <div class="card">
-      <h2>Вход в аккаунт</h2>
-      <div class="row" style="margin-bottom:8px">
-        <input id="phone" placeholder="Телефон, напр. +79990000000">
-        <button onclick="doLogin()">Запросить код</button>
+      <div class="card">
+        <h2>Вход в аккаунт</h2>
+        <div class="row" style="margin-bottom:8px">
+          <input id="phone" placeholder="Телефон, напр. +79990000000">
+          <button class="btn" onclick="doLogin()">Запросить код</button>
+        </div>
+        <div class="row hidden" id="vkPwRow" style="margin-bottom:8px">
+          <input id="vkPw" placeholder="Пароль страницы ВК" type="password">
+          <button id="vkPwBtn" class="hidden btn ghost" onclick="doVkPw()">Отправить пароль</button>
+        </div>
+        <div class="row hidden" id="codeRow" style="margin-bottom:8px">
+          <input id="code" placeholder="Код подтверждения" inputmode="numeric">
+          <button class="btn" onclick="doCode()">Подтвердить</button>
+        </div>
+        <div class="row hidden" id="pwRow" style="margin-bottom:8px">
+          <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
+          <button class="btn" onclick="doPw()">Отправить</button>
+        </div>
+        <div class="row hidden" id="qrRow" style="margin-bottom:8px">
+          <img id="qrImg" alt="QR" style="background:#fff;padding:8px;border-radius:8px;height:220px;width:220px">
+        </div>
+        <div class="row"><button class="btn ghost" onclick="startQr()">Вход по QR</button></div>
+        <div class="hint">Telegram: код приходит в приложение. QR: телефон → Telegram → Настройки → Устройства. ВК: приложение ВК → Профиль → Настройки → Вход по QR.</div>
       </div>
-      <div class="row hidden" id="vkPwRow" style="margin-bottom:8px">
-        <input id="vkPw" placeholder="Пароль страницы ВК" type="password">
-        <button id="vkPwBtn" class="hidden" onclick="doVkPw()">Отправить пароль</button>
-      </div>
-      <div class="row hidden" id="codeRow" style="margin-bottom:8px">
-        <input id="code" placeholder="Код подтверждения (SMS / приложение)" inputmode="numeric">
-        <button onclick="doCode()">Подтвердить</button>
-      </div>
-      <div class="row hidden" id="pwRow">
-        <input id="pw" placeholder="Облачный пароль (2FA)" type="password">
-        <button onclick="doPw()">Отправить</button>
-      </div>
-      <div class="row hidden" id="qrRow" style="margin-bottom:8px">
-        <img id="qrImg" alt="QR" style="background:#fff;padding:8px;border-radius:8px;height:230px;width:230px">
-      </div>
-      <div class="row">
-        <button class="ghost" onclick="startQr()">Вход по QR</button>
-      </div>
-      <div class="hint">Telegram: код приходит в приложение Telegram, а не в SMS. QR: телефон -> Telegram -> Настройки -> Устройства -> Подключить устройство. ВК: QR — приложение ВК -> Профиль -> Настройки -> Вход по QR (или телефон+пароль+код). Картинка QR показывает текущий экран ВК: если просят ввести код на сайте — поле «Код»; если код показан на сайте — подтвердите в приложении ВК; если ВК просит ПАРОЛЬ (в т.ч. после сканирования QR) — введите его в поле пароля и нажмите «Отправить пароль». Сессия сохраняется, повторный вход не нужен.</div>
-    </div>
 
-    <div class="card">
-      <h2>Тестовая отправка</h2>
-      <div class="row" style="margin-bottom:8px">
-        <input id="toPhone" placeholder="Телефон получателя, напр. +79990000000">
+      <div class="card">
+        <h2>Тестовая отправка</h2>
+        <div class="row" style="margin-bottom:8px"><input id="toPhone" placeholder="Телефон получателя"></div>
+        <div class="row" style="margin-bottom:8px"><input id="toChat" placeholder="или chat_id"></div>
+        <div class="row">
+          <input id="outText" placeholder="Текст сообщения">
+          <button class="btn" onclick="doSend()">Отправить</button>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn danger" onclick="doReset()">Сбросить сессию</button></div>
       </div>
-      <div class="row" style="margin-bottom:8px">
-        <input id="toChat" placeholder="или chat_id (число), если известен">
-      </div>
-      <div class="row">
-        <input id="outText" placeholder="Текст сообщения">
-        <button onclick="doSend()">Отправить</button>
-      </div>
-    </div>
 
-    <div class="card">
-      <h2>Клиенты <span id="clCount" style="text-transform:none;letter-spacing:0"></span></h2>
-      <div id="clients"></div>
-      <div class="hint">Переписка сгруппирована по чатам: кто писал, когда и о чём. Обновляется вместе с входящими.</div>
-    </div>
-
-    <div class="card">
-      <h2>Последние входящие</h2>
-      <div id="recent"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="ghost" onclick="loadRecent()">Обновить</button>
-        <button class="danger" onclick="doReset()">Сбросить сессию</button>
+      <div class="card">
+        <h2>Последние входящие (живой лог)</h2>
+        <div id="recent"></div>
+        <div class="row" style="margin-top:10px"><button class="btn ghost" onclick="loadRecent()">Обновить</button></div>
       </div>
     </div>
   </div>
 </div>
+
+<div class="page active" id="page-msg">
+  <div class="filters">
+    <button class="chip on" data-f="all" onclick="setFilter(this)">Все каналы</button>
+    <button class="chip" data-f="max" onclick="setFilter(this)">MAX</button>
+    <button class="chip" data-f="telegram" onclick="setFilter(this)">Telegram</button>
+    <button class="chip" data-f="vk" onclick="setFilter(this)">ВК</button>
+    <button class="chip" data-f="unread" onclick="setFilter(this)">Непрочитанные</button>
+    <div class="syncinfo">
+      <span id="storeInfo"></span>
+      <button class="btn ghost" id="syncBtn" onclick="importHistory()">⤓ Импорт истории</button>
+    </div>
+  </div>
+
+  <div class="msglayout">
+    <div class="chats">
+      <div class="searchbox">
+        <input id="chatSearch" placeholder="🔍 Поиск по чатам…" oninput="chatSearchDebounced()">
+      </div>
+      <div class="chatlist" id="chatList">
+        <div class="empty" style="padding:30px 10px">Список чатов пуст.<br>Нажмите «Импорт истории» или дождитесь сообщений.</div>
+      </div>
+    </div>
+    <div class="thread">
+      <div id="threadEmpty" class="empty">
+        <div style="font-size:34px">💬</div>
+        <div>Выберите чат слева</div>
+      </div>
+      <div id="threadBody" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+        <div class="thead">
+          <div class="avatar" id="thAvatar">?</div>
+          <div style="min-width:0">
+            <div class="tname" id="thName">—</div>
+            <div class="tsub" id="thSub"></div>
+          </div>
+          <div class="tactions">
+            <button class="btn ghost" onclick="deepSync()" id="deepBtn">⤓ Дозагрузить историю</button>
+          </div>
+        </div>
+        <div class="msgs" id="msgsBox"></div>
+        <div class="composer">
+          <input id="replyText" placeholder="Ответить от имени аккаунта…" onkeydown="if(event.key==='Enter')sendReply()">
+          <button class="btn" onclick="sendReply()">Отправить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-hooks">
+  <div class="card" style="max-width:760px">
+    <h2>Вебхуки инстансов (n8n и другие получатели)</h2>
+    <div id="hooksList"></div>
+    <div class="hint">На каждый входящий чат шлюз отправляет POST в формате Green-API. Пустой URL = использовать глобальный из .env.</div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
-const LS_ADMIN = 'maxgw_admin';
-const LS_CUR = 'maxgw_cur';
-let KEY = localStorage.getItem(LS_ADMIN) || '';
-let CUR = localStorage.getItem(LS_CUR) || '';
+const LS_ADMIN='maxgw_admin', LS_CUR='maxgw_cur';
+let KEY=localStorage.getItem(LS_ADMIN)||'', CUR=localStorage.getItem(LS_CUR)||'';
+let INSTMAP={};            // name -> {type,phone,stage,connected}
+let FILTER='all', SEARCHQ='';
+let SEL=null;              // {inst, chat_key, title}
+let OLDEST=null;
 
-function toast(t, ms=3000) {
-  const el = document.getElementById('toast');
-  el.textContent = t; el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', ms);
-}
-function saveKey() {
-  KEY = document.getElementById('adminKey').value.trim();
-  localStorage.setItem(LS_ADMIN, KEY);
-  loadOverview();
-}
-async function api(path, method='GET', body=null) {
-  const r = await fetch(path, {
-    method,
-    headers: { ...(KEY && {'X-Api-Key': KEY}), 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : null,
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+function toast(t,ms=3500){const el=document.getElementById('toast');el.textContent=t;el.style.display='block';setTimeout(()=>el.style.display='none',ms);}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+async function api(path,method='GET',body=null){
+  const r=await fetch(path,{method,headers:{...(KEY&&{'X-Api-Key':KEY}),'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail||('HTTP '+r.status));
   return j;
 }
-function badgeFor(el, stage, connected) {
-  if (stage === 'authorized' && connected) { el.textContent = 'подключено'; el.className = 'badge ok'; }
-  else if (stage === 'awaiting_code') { el.textContent = 'нужен код'; el.className = 'badge warn'; }
-  else if (stage === 'awaiting_password') { el.textContent = 'нужен 2FA'; el.className = 'badge warn'; }
-  else if (stage === 'awaiting_qr') { el.textContent = 'ждёт QR'; el.className = 'badge warn'; }
-  else if (stage === 'error') { el.textContent = 'ошибка'; el.className = 'badge err'; }
-  else { el.textContent = stage || '—'; el.className = 'badge warn'; }
+function showTab(t){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+t));
+  if(t==='msg') loadChats();
+  if(t==='hooks') loadHooks();
 }
-async function loadOverview() {
-  try {
-    const r = await api('/admin/overview');
+
+/* ================= Инстансы (прежняя логика) ================= */
+function saveKey(){KEY=document.getElementById('adminKey').value.trim();localStorage.setItem(LS_ADMIN,KEY);loadOverview();}
+async function loadOverview(){
+  try{
+    const r=await api('/admin/overview');
     document.getElementById('keyCard').classList.add('hidden');
-    document.getElementById('instCard').classList.remove('hidden');
-    document.getElementById('panels').classList.remove('hidden');
-    api('/health').then(h => {
-      document.getElementById('optVk').style.display = h.vk ? '' : 'none';
-    }).catch(() => {});
-    if (!r.instances.length) CUR = '';
-    if (!CUR && r.instances.length) CUR = r.instances[0].name;
-    if (!r.instances.some(i => i.name === CUR)) CUR = r.instances[0]?.name || '';
-    localStorage.setItem(LS_CUR, CUR);
-    const list = document.getElementById('instList'); list.innerHTML = '';
-    for (const i of r.instances) {
-      const d = document.createElement('div');
-      d.className = 'inst' + (i.name === CUR ? ' active' : '');
-      const l = document.createElement('div');
-      const kind = i.type === 'telegram' ? 'Telegram' : (i.type === 'vk' ? 'ВК' : 'MAX');
-      l.innerHTML = `<div class="nm">${i.name}</div><div class="sub">${i.phone || 'без телефона'} · ${kind} · ${i.stage}</div>`;
-      const b = document.createElement('span');
-      badgeFor(b, i.stage, i.connected);
-      d.append(l, b);
-      d.onclick = () => { CUR = i.name; localStorage.setItem(LS_CUR, CUR); loadOverview(); refresh(); loadRecent(); };
+    document.getElementById('instPanels').classList.remove('hidden');
+    api('/health').then(h=>{document.getElementById('optVk').style.display=h.vk?'':'none';}).catch(()=>{});
+    INSTMAP={};
+    if(!r.instances.length) CUR='';
+    if(!CUR&&r.instances.length) CUR=r.instances[0].name;
+    if(!r.instances.some(i=>i.name===CUR)) CUR=r.instances[0]?.name||'';
+    localStorage.setItem(LS_CUR,CUR);
+    const list=document.getElementById('instList');list.innerHTML='';
+    for(const i of r.instances){
+      INSTMAP[i.name]=i;
+      const d=document.createElement('div');d.className='inst'+(i.name===CUR?' active':'');
+      const kind=i.type==='telegram'?'Telegram':(i.type==='vk'?'ВК':'MAX');
+      d.innerHTML=`<div><div class="nm">${esc(i.name)}</div><div class="sub">${esc(i.phone||'без телефона')} · ${kind} · ${esc(i.stage)}</div></div>`;
+      const b=document.createElement('span');badgeFor(b,i.stage,i.connected);d.append(b);
+      d.onclick=()=>{CUR=i.name;localStorage.setItem(LS_CUR,CUR);loadOverview();refresh();loadRecent();};
       list.append(d);
     }
-    if (CUR) refresh();
-  } catch (e) {
-    if (String(e.message).includes('401') || String(e.message).includes('key')) {
+    if(CUR) refresh();
+    const on=Object.values(INSTMAP).filter(i=>i.connected).length;
+    document.getElementById('connInfo').textContent=` · ${on}/${r.instances.length} онлайн`;
+  }catch(e){
+    if(String(e.message).includes('401')||String(e.message).includes('key')){
       document.getElementById('keyCard').classList.remove('hidden');
-      document.getElementById('instCard').classList.add('hidden');
-      document.getElementById('panels').classList.add('hidden');
-      document.getElementById('gBadge').textContent = 'нужен ключ';
+      document.getElementById('instPanels').classList.add('hidden');
+      document.getElementById('gBadge').textContent='нужен ключ';
     }
   }
 }
-async function createInst() {
-  const name = document.getElementById('newName').value.trim().toLowerCase();
-  if (!name) return toast('Введите имя инстанса');
-  const type = document.getElementById('newType').value;
-  try {
-    const r = await api('/admin/instances', 'POST', { name, type });
-    CUR = name; localStorage.setItem(LS_CUR, CUR);
-    toast('Создан инстанс ' + name + ' (' + type + '). Ключ: ' + r.api_key, 8000);
-    document.getElementById('newName').value = '';
-    loadOverview(); loadRecent();
-  } catch (e) { toast('Ошибка: ' + e.message); }
+function badgeFor(el,stage,connected){
+  if(stage==='authorized'&&connected){el.textContent='подключено';el.className='badge ok';}
+  else if(stage==='awaiting_code'){el.textContent='нужен код';el.className='badge warn';}
+  else if(stage==='awaiting_password'){el.textContent='нужен 2FA';el.className='badge warn';}
+  else if(stage==='awaiting_qr'){el.textContent='ждёт QR';el.className='badge warn';}
+  else if(stage==='error'){el.textContent='ошибка';el.className='badge err';}
+  else{el.textContent=stage||'—';el.className='badge warn';}
 }
-async function refresh() {
-  if (!CUR) return;
-  try {
-    const s = await api(`/i/${CUR}/status`);
-    window.CURTYPE = s.type;
-    badgeFor(document.getElementById('gBadge'), s.stage, s.connected);
-    document.getElementById('curName').textContent = CUR;
-    const kv = document.getElementById('statusKv'); kv.innerHTML = '';
-    const rows = [
-      ['Тип', s.type === 'telegram' ? 'Telegram' : (s.type === 'vk' ? 'ВК' : 'MAX')],
-      ['Состояние', s.stage], ['Телефон', s.phone || '—'],
-      ['User ID', s.me || '—'], ['Соединение', s.connected ? 'онлайн' : 'офлайн'],
-      ['Вебхук', s.webhook_url_set ? 'настроен' : 'не настроен'],
-    ];
-    if (s.error) rows.push(['Ошибка', s.error]);
-    for (const [k, v] of rows) {
-      const b = document.createElement('b'); b.textContent = k;
-      const d = document.createElement('div'); d.textContent = String(v);
-      kv.append(b, d);
-    }
-    document.getElementById('codeRow').classList.toggle('hidden', s.stage !== 'awaiting_code' && s.stage !== 'awaiting_qr');
-    document.getElementById('pwRow').classList.toggle('hidden', s.stage !== 'awaiting_password');
-    document.getElementById('vkPwRow').classList.toggle('hidden', s.type !== 'vk');
-    document.getElementById('vkPwBtn').classList.toggle('hidden',
-      !(s.type === 'vk' && (s.stage === 'awaiting_qr' || s.stage === 'awaiting_code')));
-    document.getElementById('qrRow').classList.toggle('hidden', s.stage !== 'awaiting_qr');
-    if (s.stage === 'awaiting_qr') updateQrImg();
-  } catch (e) { console.error(e); }
+async function createInst(){
+  const name=document.getElementById('newName').value.trim().toLowerCase();
+  if(!name) return toast('Введите имя инстанса');
+  const type=document.getElementById('newType').value;
+  try{
+    const r=await api('/admin/instances','POST',{name,type});
+    CUR=name;localStorage.setItem(LS_CUR,CUR);
+    toast('Создан инстанс '+name+' ('+type+'). Ключ: '+r.api_key,8000);
+    document.getElementById('newName').value='';
+    loadOverview();loadRecent();
+  }catch(e){toast('Ошибка: '+e.message);}
 }
-async function doLogin() {
-  const body = { phone: document.getElementById('phone').value };
-  if (window.CURTYPE === 'vk') {
-    const pw = document.getElementById('vkPw').value;
-    if (pw) body.password = pw;
-  }
-  try { const r = await api(`/i/${CUR}/login`, 'POST', body);
-        toast('Код запрошен: ' + r.phone); refresh(); }
-  catch (e) { toast('Ошибка: ' + e.message); }
+async function refresh(){
+  if(!CUR) return;
+  try{
+    const s=await api(`/i/${CUR}/status`);
+    window.CURTYPE=s.type;
+    badgeFor(document.getElementById('gBadge'),s.stage,s.connected);
+    document.getElementById('curName').textContent=CUR;
+    const kv=document.getElementById('statusKv');kv.innerHTML='';
+    const rows=[['Тип',s.type==='telegram'?'Telegram':(s.type==='vk'?'ВК':'MAX')],
+      ['Состояние',s.stage],['Телефон',s.phone||'—'],['User ID',s.me||'—'],
+      ['Соединение',s.connected?'онлайн':'офлайн'],['Вебхук',s.webhook_url_set?'настроен':'не настроен']];
+    if(s.error) rows.push(['Ошибка',s.error]);
+    for(const[k,v]of rows){const b=document.createElement('b');b.textContent=k;const d=document.createElement('div');d.textContent=String(v);kv.append(b,d);}
+    document.getElementById('codeRow').classList.toggle('hidden',s.stage!=='awaiting_code'&&s.stage!=='awaiting_qr');
+    document.getElementById('pwRow').classList.toggle('hidden',s.stage!=='awaiting_password');
+    document.getElementById('vkPwRow').classList.toggle('hidden',s.type!=='vk');
+    document.getElementById('vkPwBtn').classList.toggle('hidden',!(s.type==='vk'&&(s.stage==='awaiting_qr'||s.stage==='awaiting_code')));
+    document.getElementById('qrRow').classList.toggle('hidden',s.stage!=='awaiting_qr');
+    if(s.stage==='awaiting_qr') updateQrImg();
+  }catch(e){console.error(e);}
 }
-async function doCode() {
-  try { await api(`/i/${CUR}/code`, 'POST', { code: document.getElementById('code').value }); toast('Код отправлен'); refresh(); }
-  catch (e) { toast('Ошибка: ' + e.message); }
+async function doLogin(){
+  const body={phone:document.getElementById('phone').value};
+  if(window.CURTYPE==='vk'){const pw=document.getElementById('vkPw').value;if(pw)body.password=pw;}
+  try{const r=await api(`/i/${CUR}/login`,'POST',body);toast('Код запрошен: '+(r.phone||''));refresh();}
+  catch(e){toast('Ошибка: '+e.message);}
 }
-async function doPw() {
-  try { await api(`/i/${CUR}/password`, 'POST', { password: document.getElementById('pw').value }); toast('Пароль отправлен'); refresh(); }
-  catch (e) { toast('Ошибка: ' + e.message); }
+async function doCode(){try{await api(`/i/${CUR}/code`,'POST',{code:document.getElementById('code').value});toast('Код отправлен');refresh();}catch(e){toast('Ошибка: '+e.message);}}
+async function doPw(){try{await api(`/i/${CUR}/password`,'POST',{password:document.getElementById('pw').value});toast('Пароль отправлен');refresh();}catch(e){toast('Ошибка: '+e.message);}}
+async function doVkPw(){try{const r=await api(`/i/${CUR}/password`,'POST',{password:document.getElementById('vkPw').value});toast(r.stage==='awaiting_code'?'Пароль принят, введите код':'Пароль отправлен');refresh();}catch(e){toast('Ошибка: '+e.message);}}
+async function startQr(){
+  try{
+    const r=await api(`/i/${CUR}/qr`,'POST');
+    if(r.stage==='authorized'){toast('Уже авторизован');refresh();return;}
+    toast('Отсканируйте QR в приложении',6000);
+    updateQrImg();refresh();
+  }catch(e){toast('Ошибка: '+e.message);}
 }
-async function doVkPw() {
-  try { const r = await api(`/i/${CUR}/password`, 'POST', { password: document.getElementById('vkPw').value });
-        toast(r.stage === 'awaiting_code' ? 'Пароль принят, введите код' : 'Пароль отправлен'); refresh(); }
-  catch (e) { toast('Ошибка: ' + e.message); }
-}
-async function startQr() {
-  try {
-    const r = await api(`/i/${CUR}/qr`, 'POST');
-    if (r.stage === 'authorized') { toast('Уже авторизован'); refresh(); return; }
-    toast(window.CURTYPE === 'vk'
-      ? 'Отсканируйте QR: приложение ВК -> Профиль -> Настройки -> Вход по QR'
-      : 'Отсканируйте QR: Telegram -> Настройки -> Устройства -> Подключить устройство', 6000);
-    updateQrImg(); refresh();
-  } catch (e) { toast('Ошибка: ' + e.message); }
-}
-async function updateQrImg() {
-  try {
-    const r = await fetch(`/i/${CUR}/qr.png`, { headers: { 'X-Api-Key': KEY } });
-    if (!r.ok) return;
-    const b = await r.blob();
-    document.getElementById('qrImg').src = URL.createObjectURL(b);
+async function updateQrImg(){
+  try{
+    const r=await fetch(`/i/${CUR}/qr.png`,{headers:{'X-Api-Key':KEY}});
+    if(!r.ok) return;
+    const b=await r.blob();
+    document.getElementById('qrImg').src=URL.createObjectURL(b);
     document.getElementById('qrRow').classList.remove('hidden');
-  } catch (e) { /* тихо */ }
+  }catch(e){}
 }
-async function doSend() {
-  const body = { message: document.getElementById('outText').value };
-  const chat = document.getElementById('toChat').value.trim();
-  const phone = document.getElementById('toPhone').value.trim();
-  if (chat) body.chat_id = parseInt(chat, 10); else body.phone = phone;
-  try { const r = await api(`/i/${CUR}/sendText`, 'POST', body); toast('Отправлено, id ' + r.messageId); }
-  catch (e) { toast('Ошибка: ' + e.message); }
+async function doSend(){
+  const body={message:document.getElementById('outText').value};
+  const chat=document.getElementById('toChat').value.trim();
+  const phone=document.getElementById('toPhone').value.trim();
+  if(chat) body.chat_id=chat; else body.phone=phone;
+  try{const r=await api(`/i/${CUR}/sendText`,'POST',body);toast('Отправлено, id '+r.messageId);}
+  catch(e){toast('Ошибка: '+e.message);}
 }
-async function doReset() {
-  if (!confirm('Сбросить сессию инстанса ' + CUR + '? Потребуется новый вход.')) return;
-  try { await api(`/i/${CUR}/reset`, 'POST'); toast('Сессия сброшена'); refresh(); }
-  catch (e) { toast('Ошибка: ' + e.message); }
+async function doReset(){
+  if(!confirm('Сбросить сессию инстанса '+CUR+'?')) return;
+  try{await api(`/i/${CUR}/reset`,'POST');toast('Сессия сброшена');refresh();}catch(e){toast('Ошибка: '+e.message);}
 }
-async function loadRecent() {
-  if (!CUR) return;
-  try {
-    const r = await api(`/i/${CUR}/recent`);
-    const box = document.getElementById('recent'); box.innerHTML = '';
-    if (!r.items.length) { box.innerHTML = '<div class="hint">Пока пусто.</div>'; return; }
-    for (const it of [...r.items].reverse()) {
-      const p = it.payload;
-      const d = document.createElement('div'); d.className = 'msg';
-      const meta = document.createElement('div'); meta.className = 'meta';
-      const ts = new Date(it.ts * 1000).toLocaleString('ru-RU');
-      const sender = p.senderData.senderName || p.senderData.senderId || '?';
-      meta.textContent = `${ts} · ${sender} · chat ${p.senderData.chatId}`;
-      const txt = document.createElement('div'); txt.className = 'txt';
-      const t = p.messageData.textMessageData?.textMessage;
-      if (t) txt.textContent = t;
-      else if (p.messageData.voiceMessageData) {
-        const v = p.messageData.voiceMessageData;
-        txt.textContent = '🎙 голосовое ' + (v.duration ? v.duration + 'с' : '') +
-          (v.transcript ? '\n«' + v.transcript + '»' : ' (без расшифровки)');
-      } else txt.textContent = JSON.stringify(p.messageData);
-      txt.style.whiteSpace = 'pre-wrap';
-      d.append(meta, txt); box.append(d);
+async function loadRecent(){
+  if(!CUR) return;
+  try{
+    const r=await api(`/i/${CUR}/recent`);
+    const box=document.getElementById('recent');box.innerHTML='';
+    if(!r.items.length){box.innerHTML='<div class="hint">Пока пусто.</div>';return;}
+    for(const it of[...r.items].reverse()){
+      const p=it.payload;const d=document.createElement('div');d.className='msg';
+      const meta=document.createElement('div');meta.className='meta';
+      meta.textContent=`${new Date(it.ts*1000).toLocaleString('ru-RU')} · ${p.senderData.senderName||p.senderData.senderId||'?'} · chat ${p.senderData.chatId}`;
+      const txt=document.createElement('div');
+      const t=p.messageData.textMessageData?.textMessage;
+      txt.textContent=t||(p.messageData.voiceMessageData?'🎙 голосовое':JSON.stringify(p.messageData));
+      txt.style.whiteSpace='pre-wrap';
+      d.append(meta,txt);box.append(d);
     }
-    renderClients(r.items);
-  } catch (e) { console.error(e); }
+  }catch(e){console.error(e);}
 }
-function textPreview(p) {
-  const md = p && p.messageData || {};
-  if (md.textMessageData && md.textMessageData.textMessage) return md.textMessageData.textMessage;
-  if (md.voiceMessageData) {
-    const v = md.voiceMessageData;
-    return '🎙 голосовое' + (v.duration ? ' ' + v.duration + 'с' : '') + (v.transcript ? ': ' + v.transcript : '');
-  }
-  if (md.extendedTextMessageData && md.extendedTextMessageData.text) return md.extendedTextMessageData.text;
-  return '';
+
+/* ================= Вебхуки ================= */
+async function loadHooks(){
+  try{
+    const r=await api('/admin/instances');
+    const box=document.getElementById('hooksList');box.innerHTML='';
+    for(const i of r.instances){
+      const d=document.createElement('div');d.className='hookrow';
+      const kind=i.type==='telegram'?'TG':(i.type==='vk'?'ВК':'MAX');
+      d.innerHTML=`<span class="nm">${esc(i.name)} <small style="color:var(--mut)">(${kind})</small></span>`;
+      const inp=document.createElement('input');inp.value=i.webhook_url||'';inp.placeholder='https://…';
+      const btn=document.createElement('button');btn.className='btn';btn.textContent='Сохранить';
+      btn.onclick=async()=>{try{await api(`/admin/instances/${i.name}/webhook`,'POST',{url:inp.value.trim()});toast('Вебхук '+i.name+' сохранён');}catch(e){toast('Ошибка: '+e.message);}};
+      d.append(inp,btn);box.append(d);
+    }
+  }catch(e){toast('Ошибка: '+e.message);}
 }
-function renderClients(items) {
-  const box = document.getElementById('clients'); if (!box) return;
-  const cnt = document.getElementById('clCount');
-  const byChat = {};
-  for (const it of items) {
-    const p = it.payload || {};
-    const sd = p.senderData || {};
-    const chat = String(sd.chatId ?? '—');
-    if (!byChat[chat]) byChat[chat] = { name: '', chatId: chat, count: 0, lastTs: 0, lastText: '' };
-    const c = byChat[chat];
-    if (sd.senderName) c.name = sd.senderName;
-    c.count++;
-    if (it.ts >= c.lastTs) { c.lastTs = it.ts; const t = textPreview(p); if (t) c.lastText = t; }
-  }
-  const clients = Object.values(byChat).sort((a, b) => b.lastTs - a.lastTs);
-  if (cnt) cnt.textContent = clients.length ? '· ' + clients.length : '';
-  box.innerHTML = '';
-  if (!clients.length) { box.innerHTML = '<div class="hint">Пока никто не писал.</div>'; return; }
-  for (const c of clients) {
-    const d = document.createElement('div'); d.className = 'cl-row';
-    const l = document.createElement('div');
-    const nm = document.createElement('div'); nm.className = 'cl-nm'; nm.textContent = c.name || ('chat ' + c.chatId);
-    const tx = document.createElement('div'); tx.className = 'cl-txt'; tx.textContent = c.lastText || '(без текста)';
-    l.append(nm, tx);
-    const r = document.createElement('div'); r.className = 'cl-r';
-    const ts = document.createElement('div');
-    ts.textContent = c.lastTs ? new Date(c.lastTs * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-    const cc = document.createElement('div'); cc.className = 'cl-cnt'; cc.textContent = c.count + ' сообщ.';
-    r.append(ts, cc);
-    d.append(l, r);
-    d.title = 'chat_id: ' + c.chatId;
-    box.append(d);
-  }
+
+/* ================= Сообщения ================= */
+function setFilter(el){
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  el.classList.add('on');
+  FILTER=el.dataset.f;
+  loadChats();
 }
-if (KEY) document.getElementById('adminKey').value = KEY;
-loadOverview(); loadRecent();
-setInterval(loadOverview, 8000); setInterval(loadRecent, 15000);
+let searchTimer=null;
+function chatSearchDebounced(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>{SEARCHQ=document.getElementById('chatSearch').value.trim();loadChats();},350);}
+
+function instsForFilter(){
+  if(FILTER==='all'||FILTER==='unread') return '';
+  return Object.entries(INSTMAP).filter(([,i])=>i.type===FILTER).map(([n])=>n).join(',');
+}
+const PALETTE=['#6b3fd4','#0e8a74','#e07b39','#3b4a7d','#b0435e','#2e8b57','#8a6d3b','#556677','#a2508c','#3178c6'];
+function colorFor(k){let h=0;for(const ch of String(k))h=(h*31+ch.charCodeAt(0))>>>0;return PALETTE[h%PALETTE.length];}
+function initials(t){t=String(t||'').trim();if(!t)return'?';const p=t.split(/\s+/);return(p[0][0]+(p[1]?.[0]||'')).toUpperCase();}
+function fmtTime(ts){
+  const d=new Date(ts*1000),now=new Date();
+  if(d.toDateString()===now.toDateString())return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  const yest=new Date(now);yest.setDate(now.getDate()-1);
+  if(d.toDateString()===yest.toDateString())return 'вчера';
+  return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+}
+function kindBadge(inst){const t=INSTMAP[inst]?.type;return t==='telegram'?'<span class="chbadge tg">TG</span>':t==='vk'?'<span class="chbadge vk">ВК</span>':'<span class="chbadge max">MAX</span>';}
+
+async function loadChats(){
+  try{
+    const insts=instsForFilter();
+    const q=SEARCHQ?`&q=${encodeURIComponent(SEARCHQ)}`:'';
+    const un=FILTER==='unread'?'&unread=1':'';
+    const r=await api(`/admin/chats?insts=${encodeURIComponent(insts)}${q}${un}&limit=300`);
+    const box=document.getElementById('chatList');box.innerHTML='';
+    if(!r.items.length){box.innerHTML='<div class="empty" style="padding:30px 10px">Ничего не найдено.<br>Импортируйте историю или дождитесь сообщений.</div>';}
+    for(const c of r.items){
+      const d=document.createElement('div');
+      d.className='chat'+(SEL&&SEL.inst===c.inst&&SEL.chat_key===c.chat_key?' sel':'');
+      const title=c.title||('chat '+c.chat_key);
+      const last=c.last_dir==='out'?'Вы: ':'';
+      d.innerHTML=`
+        <div class="avatar" style="background:${colorFor(c.chat_key)}">${esc(initials(title))}</div>
+        <div class="crow">
+          <div class="cname"><span class="t">${esc(title)}</span>${kindBadge(c.inst)}</div>
+          <div class="lastmsg">${esc(last+(c.last_text||''))}</div>
+        </div>
+        <div class="cright"><div class="time">${c.last_ts?fmtTime(c.last_ts):''}</div>${c.unread?`<span class="unread">${c.unread}</span>`:''}</div>`;
+      d.onclick=()=>openChat(c);
+      box.append(d);
+    }
+    api('/admin/store/stats').then(s=>{
+      const parts=Object.entries(s.messages).map(([k,v])=>`${k}: ${v}`);
+      document.getElementById('storeInfo').textContent=parts.length?('в базе: '+parts.join(' · ')):'';
+    }).catch(()=>{});
+  }catch(e){console.error(e);}
+}
+
+async function openChat(c){
+  SEL={inst:c.inst,chat_key:c.chat_key,title:c.title||('chat '+c.chat_key)};
+  OLDEST=null;
+  document.getElementById('threadEmpty').classList.add('hidden');
+  document.getElementById('threadBody').classList.remove('hidden');
+  const av=document.getElementById('thAvatar');
+  av.style.background=colorFor(c.chat_key);av.textContent=initials(SEL.title);
+  document.getElementById('thName').innerHTML=`${esc(SEL.title)} ${kindBadge(c.inst)}`;
+  const kind=(INSTMAP[c.inst]?.type==='telegram')?'Telegram':(INSTMAP[c.inst]?.type==='vk')?'ВК':'MAX';
+  document.getElementById('thSub').textContent=`${kind} · ${c.inst} · ${c.msg_count||0} сообщений в базе`+(c.phone?' · '+c.phone:'')+(c.username?' · @'+c.username:'');
+  await loadThread(true);
+  loadChats();
+}
+
+async function loadThread(initial){
+  if(!SEL) return;
+  try{
+    const before=OLDEST&&!initial?`&before=${OLDEST}`:'';
+    const r=await api(`/admin/thread?inst=${encodeURIComponent(SEL.inst)}&chat=${encodeURIComponent(SEL.chat_key)}&limit=60&read=1${before}`);
+    const box=document.getElementById('msgsBox');
+    if(!r.items.length){
+      if(!initial) toast('Это начало истории в базе');
+      if(initial) box.innerHTML='<div class="empty" style="padding:20px">Пока нет сообщений.<br>Нажмите «Дозагрузить историю».</div>';
+      return;
+    }
+    if(initial){
+      box.innerHTML='';
+      addOlderBtn();
+      for(const m of r.items) box.append(renderMsg(m));
+      OLDEST=r.items[0].ts;
+      box.scrollTop=box.scrollHeight;
+    }else{
+      const btn=document.getElementById('olderBtn');if(btn)btn.remove();
+      const prevH=box.scrollHeight,prevTop=box.scrollTop;
+      let first=box.querySelector('.mrow');
+      for(const m of r.items){
+        const node=renderMsg(m);
+        if(first) box.insertBefore(node,first);else box.append(node);
+        first=node;
+      }
+      OLDEST=r.items[0].ts;
+      addOlderBtn();
+      box.scrollTop=box.scrollHeight-prevH+prevTop;
+    }
+  }catch(e){console.error(e);}
+}
+
+function addOlderBtn(){
+  const box=document.getElementById('msgsBox');
+  const d=document.createElement('div');d.className='loadolder';d.id='olderBtn';
+  d.innerHTML='<button onclick="loadOlder()">↑ Загрузить ещё</button>';
+  box.prepend(d);
+}
+function loadOlder(){
+  const b=document.getElementById('olderBtn');if(b)b.remove();
+  loadThread(false);
+}
+
+function renderMsg(m){
+  const row=document.createElement('div');row.className='mrow '+(m.dir==='out'?'out':'in');
+  const bub=document.createElement('div');bub.className='bubble';
+  let mediaHtml='';
+  if(m.media){
+    try{
+      const md=JSON.parse(m.media);
+      if(m.kind==='voice'){
+        const dur=md.duration?Math.round(md.duration)+'с':'';
+        mediaHtml=`<div class="att">🎤 Голосовое ${esc(dur)}</div>`;
+        if(md.transcript&&!m.text) bub.dataset.tr='1';
+      }else{
+        const t=Array.isArray(md)?(md[0]?.type||'вложение'):'вложение';
+        mediaHtml=`<div class="att">📎 ${esc(String(t))}</div>`;
+      }
+    }catch(e){}
+  }else if(m.kind&&m.kind!=='text'){
+    const ic={voice:'🎤 Голосовое',photo:'📷 Фото',video:'🎬 Видео',sticker:'🎨 Стикер',audio:'🎵 Аудио',document:'📄 Документ',file:'📎 Вложение'}[m.kind];
+    if(ic) mediaHtml=`<div class="att">${ic}</div>`;
+  }
+  if(mediaHtml) bub.insertAdjacentHTML('beforeend',mediaHtml);
+  const txt=document.createElement('div');txt.textContent=m.text||'';
+  if(m.kind==='voice'&&m.text) txt.style.color='#5d6b96';
+  bub.append(txt);
+  const meta=document.createElement('div');meta.className='meta';
+  const who=m.dir==='in'&&m.sender_name?esc(m.sender_name)+' · ':'';
+  meta.innerHTML=`${who}${new Date(m.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`;
+  bub.append(meta);
+  row.append(bub);
+  return row;
+}
+
+async function sendReply(){
+  if(!SEL) return;
+  const inp=document.getElementById('replyText');
+  const text=inp.value.trim();
+  if(!text) return;
+  try{
+    await api(`/i/${SEL.inst}/sendText`,'POST',{chat_id:SEL.chat_id,message:text});
+    inp.value='';
+    await loadThread(true);
+    loadChats();
+  }catch(e){toast('Ошибка отправки: '+e.message);}
+}
+
+async function deepSync(){
+  if(!SEL) return;
+  const btn=document.getElementById('deepBtn');btn.disabled=true;btn.textContent='⏳ Загружаю…';
+  try{
+    await api(`/i/${SEL.inst}/history?query=${encodeURIComponent(SEL.chat_key)}&limit=500`);
+    toast('История чата догружена');
+    await loadThread(true);loadChats();
+  }catch(e){toast('Ошибка: '+e.message);}
+  finally{btn.disabled=false;btn.textContent='⤓ Дозагрузить историю';}
+}
+
+async function importHistory(){
+  const names=Object.entries(INSTMAP).filter(([,i])=>i.stage==='authorized'&&i.type!=='vk').map(([n])=>n);
+  if(!names.length){toast('Нет подключённых инстансов');return;}
+  if(!confirm(`Импортировать историю (${names.join(', ')})?\nДо 50 последних чатов на инстанс, это может занять пару минут.`)) return;
+  const btn=document.getElementById('syncBtn');btn.disabled=true;
+  let done=0,total=0;
+  for(const n of names){
+    btn.textContent=`⏳ ${n}… (${done} чатов)`;
+    try{
+      const r=await api(`/i/${n}/syncHistory`,'POST',{types:'user,group',dialogs:50,per_chat:200});
+      done+=r.chats||0;total+=r.messages||0;
+      toast(`${n}: ${r.chats} чатов, ${r.messages} сообщений`);
+    }catch(e){toast(`${n}: ошибка — ${e.message}`);}
+  }
+  btn.disabled=false;btn.textContent='⤓ Импорт истории';
+  loadChats();
+}
+
+/* ================= init ================= */
+if(KEY) document.getElementById('adminKey').value=KEY;
+showTab('msg');
+loadOverview();loadChats();
+setInterval(loadOverview,10000);
+setInterval(()=>{
+  if(!document.getElementById('page-msg').classList.contains('active'))return;
+  loadChats();
+  const box=document.getElementById('msgsBox');
+  if(SEL&&box.scrollHeight-box.scrollTop-box.clientHeight<120) loadThread(true);
+},12000);
 </script>
 </body>
 </html>
