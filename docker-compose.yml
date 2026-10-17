@@ -29,7 +29,7 @@ services:
       WORK_DIR: /data
       SESSION_NAME: maxgw.db
       LOG_LEVEL: INFO
-      PYMAX_LOG_LEVEL: DEBUG
+      PYMAX_LOG_LEVEL: ${PYMAX_LOG_LEVEL:-INFO}
     networks:
       - default
 
