@@ -10,12 +10,14 @@ FastAPI + PyMax (неофициальный внутренний API MAX).
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
 import secrets
 import shutil
+import subprocess
 import time
 import uuid
 from collections import deque
@@ -23,11 +25,70 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from pymax import Client, ExtraConfig, RegistrationConfig
+
+# --- Патч pymax: MAX-сервер сменил формат upload-URL (нет photoIds) ------------
+import aiohttp  # noqa: E402
+from pymax.api.uploads.service import UploadService  # noqa: E402
+from pymax.api.uploads.models import PhotoUploadResponse  # noqa: E402
+from pymax.api.uploads.payloads import AttachPhotoPayload, UploadPayload  # noqa: E402
+
+_orig_upload_photo = UploadService.upload_photo
+
+
+async def _patched_upload_photo(self, photo, profile: bool = False) -> AttachPhotoPayload:
+    """Совместимость со старым и новым форматом upload-URL MAX.
+
+    Старый: ...?photoIds=N (id до загрузки). Новый: uploadImage?r=token —
+    id появляется только в ответе сервера; берём единственный ключ из ответа.
+    """
+    payload = UploadPayload(profile=profile).to_payload()
+    data = await self.app.invoke(80, payload=payload)  # Opcode.PHOTO_UPLOAD
+    url = None
+    try:
+        from pymax.api.response import payload_item
+        url = payload_item(data, "url", str)
+    except Exception:
+        url = None
+    if not url:
+        return await _orig_upload_photo(self, photo, profile=profile)
+
+    from urllib.parse import parse_qs, urlparse, quote
+    photo_id = None
+    try:
+        photo_id = str(parse_qs(urlparse(url).query)["photoIds"][0])
+    except Exception:
+        photo_id = None  # новый формат: id узнаем из ответа после загрузки
+
+    photo_data = photo.validate_photo()
+    photo_bytes = await photo.read()
+    form = aiohttp.FormData()
+    form.add_field(name="file", value=photo_bytes,
+                   filename=f"image.{quote(photo_data[0])}",
+                   content_type=photo_data[1])
+    async with aiohttp.ClientSession(proxy=self.app.config.proxy) as session:
+        async with session.post(url=url, data=form) as response:
+            if response.status != 200:
+                raise RuntimeError(f"photo upload HTTP {response.status}")
+            result = await response.json()
+    model = PhotoUploadResponse.model_validate(result)
+    if photo_id not in (model.photos or {}):
+        keys = list(model.photos or {})
+        log.info("pymax patch: upload url without photoIds; response keys=%s", keys)
+        if photo_id is None and len(keys) == 1:
+            photo_id = keys[0]
+        else:
+            raise RuntimeError(f"photo token not found for photo_id={photo_id}")
+    token = model.photos[photo_id].token
+    return AttachPhotoPayload(photo_token=token)
+
+
+UploadService.upload_photo = _patched_upload_photo
+# --- конец патча pymax -------------------------------------------------------
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -54,10 +115,19 @@ PHONE = os.environ.get("PHONE", "").strip()
 CODE_TIMEOUT = int(os.environ.get("CODE_TIMEOUT", "900"))
 MAX_VOICE_BYTES = 20 * 1024 * 1024
 
-# Расшифровка голосовых: любой OpenAI-совместимый endpoint /v1/audio/transcriptions
+# Расшифровка голосовых. Два режима (STT_STYLE):
+#   form — любой OpenAI-совместимый endpoint /v1/audio/transcriptions (whisper)
+#   chat — провайдер без whisper-endpoint (напр. Hubris): модель вида
+#          openai/gpt-audio-mini через {STT_BASE_URL}/chat/completions,
+#          принимает только wav/mp3, поэтому конвертируем ffmpeg'ом
 STT_BASE_URL = os.environ.get("STT_BASE_URL", "").rstrip("/")
 STT_API_KEY = os.environ.get("STT_API_KEY", "")
 STT_MODEL = os.environ.get("STT_MODEL", "whisper-1")
+STT_STYLE = os.environ.get("STT_STYLE", "form")
+STT_PROMPT = os.environ.get(
+    "STT_PROMPT",
+    "Расшифруй голосовое сообщение дословно. "
+    "Верни только расшифрованный текст, без комментариев.")
 
 
 # ---------------------------------------------------------------- instances
@@ -290,20 +360,74 @@ def sender_info(c: Client, user_id: Any) -> tuple[Optional[str], Optional[str]]:
     return name, (f"+{ph}" if ph else None)
 
 
-async def transcribe(data: bytes, mime: str = "audio/ogg") -> Optional[str]:
+def _ffmpeg_to_mp3(data: bytes) -> Optional[bytes]:
+    """Любой входной аудиоформат (ogg/oga/opus/ogg opus из TG/WA) -> mp3 16k mono."""
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", "pipe:0", "-vn", "-ac", "1",
+             "-ar", "16000", "-b:a", "48k", "-f", "mp3", "pipe:1"],
+            input=data, capture_output=True, timeout=60)
+        if p.returncode == 0 and p.stdout:
+            return p.stdout
+        log.warning("ffmpeg convert failed: rc=%s stderr=%s", p.returncode,
+                    p.stderr.decode(errors="replace")[:200])
+    except Exception as e:  # noqa: BLE001
+        log.warning("ffmpeg convert error: %s", e)
+    return None
+
+
+async def transcribe(data: bytes, mime: str = "audio/ogg",
+                     prompt: Optional[str] = None) -> Optional[str]:
     if not (STT_BASE_URL and STT_API_KEY):
         return None
+    prompt = prompt or STT_PROMPT
     try:
-        async with httpx.AsyncClient(timeout=120) as hc:
-            r = await hc.post(
-                STT_BASE_URL,
-                headers={"Authorization": f"Bearer {STT_API_KEY}"},
-                files={"file": ("voice.ogg", data, mime)},
-                data={"model": STT_MODEL, "language": "ru"},
-            )
-            if r.status_code == 200:
-                return (r.json().get("text") or "").strip() or None
-            log.warning("STT failed: %s %s", r.status_code, r.text[:200])
+        async with httpx.AsyncClient(timeout=180) as hc:
+            if STT_STYLE == "chat":
+                # gpt-audio через chat completions: только wav/mp3
+                mp3 = await asyncio.to_thread(_ffmpeg_to_mp3, data)
+                if not mp3:
+                    log.warning("STT: конвертация в mp3 не удалась")
+                    return None
+                r = await hc.post(
+                    f"{STT_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {STT_API_KEY}"},
+                    json={
+                        "model": STT_MODEL,
+                        "temperature": 0,
+                        "modalities": ["text"],
+                        "messages": [
+                            # без system-сообщения модель иногда отвечает
+                            # на вопрос из голосового вместо расшифровки
+                            {"role": "system", "content":
+                                "Ты система автоматической транскрипции голосовых "
+                                "сообщений. Ты только возвращаешь дословный текст "
+                                "речи. Ты никогда не отвечаешь на вопросы из аудио."},
+                            {"role": "user", "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "input_audio", "input_audio": {
+                                    "data": base64.b64encode(mp3).decode(),
+                                    "format": "mp3"}},
+                            ]}],
+                    })
+                if r.status_code == 200:
+                    msg = r.json()["choices"][0]["message"]
+                    text = msg.get("content") or ""
+                    if isinstance(text, list):  # на случай content-parts
+                        text = "".join(p.get("text", "") for p in text
+                                       if isinstance(p, dict))
+                    return text.strip() or None
+                log.warning("STT failed: %s %s", r.status_code, r.text[:200])
+            else:
+                r = await hc.post(
+                    STT_BASE_URL,
+                    headers={"Authorization": f"Bearer {STT_API_KEY}"},
+                    files={"file": ("voice.ogg", data, mime)},
+                    data={"model": STT_MODEL, "language": "ru"},
+                )
+                if r.status_code == 200:
+                    return (r.json().get("text") or "").strip() or None
+                log.warning("STT failed: %s %s", r.status_code, r.text[:200])
     except Exception as e:  # noqa: BLE001
         log.warning("STT error: %s", e)
     return None
@@ -675,6 +799,15 @@ class SendTextBody(BaseModel):
     chat_id: Optional[int] = None
 
 
+class SendPhotoBody(BaseModel):
+    """Фото с подписью: url картинки или base64 (photo_b64)."""
+    caption: str = ""
+    url: str = ""
+    photo_b64: str = ""
+    phone: Optional[str] = None
+    chat_id: Optional[int] = None
+
+
 class CreateInstBody(BaseModel):
     name: str
     webhook_url: str = ""
@@ -786,6 +919,48 @@ async def act_send_text(inst: Inst, body: SendTextBody) -> dict:
             "messageId": str(mid) if mid is not None else None}
 
 
+async def act_send_photo(inst: Inst, body: SendPhotoBody) -> dict:
+    """Отправка фото (с подписью) в чат MAX: attachments=[Photo(...)]."""
+    if inst.type == "telegram":
+        require_tg()
+        return await TG.act_send_photo(inst, body)
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    if not body.url and not body.photo_b64:
+        raise HTTPException(status_code=400, detail="need url or photo_b64")
+    chat_id = body.chat_id
+    if chat_id is None:
+        if not body.phone:
+            raise HTTPException(status_code=400, detail="need phone or chat_id")
+        contact = await inst.client.search_by_phone(normalize_phone(body.phone))
+        if contact is None:
+            raise HTTPException(status_code=404, detail="user not found by phone")
+        me_id = inst.me
+        if me_id is None:
+            raise HTTPException(status_code=500, detail="me unknown")
+        res = inst.client.get_chat_id(first_user_id=me_id, second_user_id=contact.id)
+        if asyncio.iscoroutine(res):
+            res = await res
+        chat_id = res
+    else:
+        chat_id = resolve_chat_id(inst, chat_id)
+    from pymax import Photo
+    try:
+        if body.url:
+            photo = Photo(url=body.url)
+        else:
+            photo = Photo(raw=base64.b64decode(body.photo_b64), name="poster.png")
+        sent = await inst.client.send_message(
+            chat_id=chat_id, text=body.caption or None, attachments=[photo])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
+    mid = getattr(sent, "id", None)
+    return {"ok": True, "instance": inst.name, "chatId": str(chat_id),
+            "messageId": str(mid) if mid is not None else None}
+
+
 # ---------------------------------------------------------------- routes: UI + health
 
 
@@ -797,6 +972,84 @@ async def index():
 @app.get("/health")
 async def health():
     return {"ok": True, "instances": len(INSTANCES), "telegram": TG is not None}
+
+
+@app.api_route("/echo", methods=["GET", "POST"])
+async def echo(request: Request):
+    """Отладка: имена заголовков и префикс x-api-key (без полного ключа)."""
+    xk = request.headers.get("x-api-key", "")
+    return {"headers": sorted(request.headers.keys()),
+            "x_api_key_prefix": xk[:6] if xk else None,
+            "x_api_key_len": len(xk) if xk else 0}
+
+
+def _parse_multipart(ctype: str, raw: bytes):
+    """Бинарно-безопасный разбор multipart: n8n шлёт файловую часть без
+    filename (строгие парсеры считают её текстовым полем), а email-парсер
+    портит бинарные данные. Возвращаем (data, mime, prompt): первая
+    не-prompt часть = файл."""
+    m = re.search(r'boundary="?([^";,]+)"?', ctype)
+    if not m:
+        return None, None, None
+    delim = b"--" + m.group(1).encode()
+    data: Optional[bytes] = None
+    mime: Optional[str] = None
+    prompt: Optional[str] = None
+    for chunk in raw.split(delim):
+        if chunk in (b"", b"--", b"--\r\n", b"--\n"):
+            continue
+        if chunk.startswith(b"\r\n"):
+            chunk = chunk[2:]
+        elif chunk.startswith(b"\n"):
+            chunk = chunk[1:]
+        sep = b"\r\n\r\n" if b"\r\n\r\n" in chunk else (
+            b"\n\n" if b"\n\n" in chunk else None)
+        if sep is None:
+            continue
+        head, body = chunk.split(sep, 1)
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+        elif body.endswith(b"\n"):
+            body = body[:-1]
+        if not body:
+            continue
+        head_str = head.decode("utf-8", "replace")
+        nm = re.search(r'name=(?:"([^"]*)"|([^;\r\n]+))', head_str)
+        name = (nm.group(1) or nm.group(2)).strip() if nm else ""
+        ctm = re.search(r"[Cc]ontent-[Tt]ype:\s*([^\r\n;]+)", head_str)
+        if name == "prompt" and prompt is None:
+            prompt = body.decode("utf-8", "replace").strip() or None
+        elif data is None:
+            data = body
+            mime = ctm.group(1).strip() if ctm else None
+    return data, mime, prompt
+
+
+@app.post("/stt")
+async def stt(request: Request, x_api_key: str = Header(default="")):
+    """Расшифровка голосового (multipart, имя/filename части любые) -> {"text": ...}.
+
+    Единая точка STT для n8n и внешних потребителей: конвертирует в mp3
+    и зовёт настроенного провайдера (см. STT_* в окружении)."""
+    require_admin(x_api_key)
+    if not (STT_BASE_URL and STT_API_KEY):
+        raise HTTPException(503, "STT не настроен (STT_BASE_URL/STT_API_KEY)")
+    ctype = request.headers.get("content-type", "")
+    if ctype.startswith("multipart/"):
+        raw = await request.body()
+        if len(raw) > MAX_VOICE_BYTES + 64 * 1024:
+            raise HTTPException(413, f"тело больше {MAX_VOICE_BYTES} байт")
+        data, mime, prompt = _parse_multipart(ctype, raw)
+    else:  # сырое аудио телом запроса
+        data, mime, prompt = await request.body(), (ctype or None), None
+    if not data:
+        raise HTTPException(400, "нет файловой части в запросе")
+    if len(data) > MAX_VOICE_BYTES:
+        raise HTTPException(413, f"файл больше {MAX_VOICE_BYTES} байт")
+    text = await transcribe(data, mime or "audio/ogg", prompt)
+    if text is None:
+        raise HTTPException(502, "STT провайдер не вернул текст")
+    return {"text": text}
 
 
 # ---------------------------------------------------------------- routes: admin
@@ -894,6 +1147,13 @@ async def i_send_text(name: str, body: SendTextBody, x_api_key: str = Header(def
     inst = get_inst(name)
     require_inst(x_api_key, inst)
     return await act_send_text(inst, body)
+
+
+@app.post("/i/{name}/sendPhoto")
+async def i_send_photo(name: str, body: SendPhotoBody, x_api_key: str = Header(default="")):
+    inst = get_inst(name)
+    require_inst(x_api_key, inst)
+    return await act_send_photo(inst, body)
 
 
 @app.post("/i/{name}/reset")
@@ -1019,6 +1279,11 @@ async def legacy_password(body: PasswordBody, x_api_key: str = Header(default=""
 @app.post("/sendText")
 async def legacy_send_text(body: SendTextBody, x_api_key: str = Header(default="")):
     return await i_send_text("default", body, x_api_key)
+
+
+@app.post("/sendPhoto")
+async def legacy_send_photo(body: SendPhotoBody, x_api_key: str = Header(default="")):
+    return await i_send_photo("default", body, x_api_key)
 
 
 @app.post("/reset")

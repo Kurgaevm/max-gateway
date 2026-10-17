@@ -114,7 +114,7 @@ async def _mark_authorized(inst: Any, me: Any) -> None:
         inst.phone = "+" + str(ph).lstrip("+")
     save_instances()
     log.info("[%s] AUTHORIZED (telegram) as user_id=%s", inst.name, me.id)
-    _begin_run(inst)
+    await _begin_run(inst)
 
 
 async def start_client(inst: Any) -> None:
@@ -445,6 +445,43 @@ async def act_send_text(inst: Any, body: Any) -> dict:
         raise HTTPException(status_code=400, detail="need phone or chat_id")
     try:
         m = await inst.client.send_message(entity, body.message)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail="chat not found: передайте chat_id из входящего вебхука или телефон контакта",
+        ) from e
+    except errors.RPCError as e:
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {e}") from e
+    return {
+        "ok": True,
+        "instance": inst.name,
+        "chatId": str(m.chat_id),
+        "messageId": str(m.id),
+    }
+
+
+async def act_send_photo(inst: Any, body: Any) -> dict:
+    """Фото (url или base64) с подписью через Telethon."""
+    import base64 as _b64
+
+    if inst.client is None or inst.stage != "authorized":
+        raise HTTPException(status_code=409, detail=f"stage={inst.stage}")
+    if not (getattr(body, "url", "") or getattr(body, "photo_b64", "")):
+        raise HTTPException(status_code=400, detail="need url or photo_b64")
+    entity: Any = None
+    if body.chat_id is not None:
+        entity = int(body.chat_id)
+    elif body.phone:
+        from main import normalize_phone
+
+        entity = normalize_phone(body.phone)
+    else:
+        raise HTTPException(status_code=400, detail="need phone or chat_id")
+    file: Any = body.url or io.BytesIO(_b64.b64decode(body.photo_b64))
+    if not isinstance(file, str):
+        file.name = "poster.png"
+    try:
+        m = await inst.client.send_message(entity, body.caption or "", file=file)
     except ValueError as e:
         raise HTTPException(
             status_code=404,

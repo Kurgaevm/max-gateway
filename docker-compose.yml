@@ -14,6 +14,8 @@ services:
       STT_BASE_URL: ${STT_BASE_URL:-}
       STT_API_KEY: ${STT_API_KEY:-}
       STT_MODEL: ${STT_MODEL:-whisper-1}
+      STT_STYLE: ${STT_STYLE:-form}
+      STT_PROMPT: ${STT_PROMPT:-}
       REG_FIRST_NAME: ${MAXGW_REG_FIRST:-Maomao}
       REG_LAST_NAME: ${MAXGW_REG_LAST:-Test}
       TG_API_ID: ${TG_API_ID:-}
@@ -23,7 +25,7 @@ services:
       WORK_DIR: /data
       SESSION_NAME: maxgw.db
       LOG_LEVEL: INFO
-      PYMAX_LOG_LEVEL: INFO
+      PYMAX_LOG_LEVEL: DEBUG
     networks:
       - default
 
