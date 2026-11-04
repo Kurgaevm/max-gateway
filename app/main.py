@@ -2,7 +2,7 @@
 
 FastAPI + PyMax (неофициальный внутренний API MAX).
 - Несколько аккаунтов (инстансов) на одну установку
-- Вход по телефону + SMS-код (код передаётся через API/веб-интерфейс)
+- Вход по телефону + SMS-код (код передаётся через API/веб-интерфейс) или по QR-коду
 - Входящие сообщения -> вебхук на URL инстанса (формат совместим с Green-API)
 - Голосовые сообщения: скачивание + расшифровка через OpenAI-совместимый STT
 - Исходящие: POST /i/{name}/sendText
@@ -29,7 +29,8 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from pymax import Client, ExtraConfig, RegistrationConfig
+from pymax import Client, ExtraConfig, RegistrationConfig, WebClient
+from pymax.auth import QrAuthFlow
 
 # --- Патч pymax: MAX-сервер сменил формат upload-URL (нет photoIds) ------------
 import aiohttp  # noqa: E402
@@ -332,8 +333,20 @@ class InstPasswordProvider:
         return pw
 
 
-def build_client(inst: Inst) -> Client:
-    extra = ExtraConfig(
+class InstQrProvider:
+    """QrHandler для pymax: QR-ссылка инстанса MAX + стадия awaiting_qr."""
+
+    def __init__(self, inst: Inst) -> None:
+        self.inst = inst
+
+    async def show_qr(self, qr_url: str) -> None:
+        self.inst.qr_url = qr_url
+        self.inst.stage = "awaiting_qr"
+        log.info("[%s] new MAX qr link", self.inst.name)
+
+
+def _extra_config() -> ExtraConfig:
+    return ExtraConfig(
         log_level=os.environ.get("PYMAX_LOG_LEVEL", "INFO"),
         reconnect=True,
         reconnect_delay=3,
@@ -342,11 +355,15 @@ def build_client(inst: Inst) -> Client:
             last_name=os.environ.get("REG_LAST_NAME", "Bot"),
         ),
     )
+
+
+def build_client(inst: Inst, auth_flow: Any = None) -> Client:
     return Client(
         phone=inst.phone or "",
         work_dir=WORK_DIR,
         session_name=f"sessions/{inst.name}.db",
-        extra_config=extra,
+        extra_config=_extra_config(),
+        auth_flow=auth_flow,
         sms_code_provider=InstSmsProvider(inst),
         password_provider=InstPasswordProvider(inst),
     )
@@ -622,6 +639,7 @@ async def start_client(inst: Inst) -> None:
         require_tg()
         await TG.start_client(inst)
         return
+    await _cancel_qr_task(inst)  # вход по телефону глушит висящий QR-воркер
     if inst.task is not None and not inst.task.done():
         if inst.client is not None:
             try:
@@ -659,6 +677,7 @@ async def stop_client(inst: Inst) -> None:
         if TG is not None:
             await TG.stop_client(inst)
         return
+    await _cancel_qr_task(inst)
     if inst.client is not None:
         try:
             await inst.client.stop()
@@ -673,6 +692,66 @@ async def stop_client(inst: Inst) -> None:
     inst.client = None
     inst.task = None
     inst.connected = False
+
+
+async def _cancel_qr_task(inst: Inst) -> None:
+    """Гасит фоновый QR-воркер MAX (если жив) и чистит ссылку."""
+    t = inst.qr_task
+    if t is not None and not t.done():
+        t.cancel()
+        try:
+            await t
+        except BaseException:  # noqa: BLE001
+            pass
+    inst.qr_task = None
+
+
+async def max_qr_start(inst: Inst) -> dict:
+    """MAX: вход по QR (как в Telegram/ВК). QR-ссылка появится в inst.qr_url."""
+    if inst._live_connected():
+        return {"ok": True, "stage": inst.stage, "qr_url": None}
+    await stop_client(inst)
+    inst.error = None
+    inst.qr_url = None
+    inst.stage = "awaiting_qr"
+
+    async def worker() -> None:
+        # При истечении срока QR pymax бросает "QR authentication expired":
+        # пересобираем клиента (новый QR), до 5 попыток.
+        for _ in range(5):
+            try:
+                # QR в MAX разрешён только веб-клиенту (mobile-device получает
+                # qr_login.disabled), поэтому вход идёт через WebClient (WS+web-UA).
+                client = WebClient(
+                    session_name=f"sessions/{inst.name}.db",
+                    work_dir=WORK_DIR,
+                    extra_config=_extra_config(),
+                    auth_flow=QrAuthFlow(InstQrProvider(inst), InstPasswordProvider(inst)),
+                )
+                inst.client = client
+                attach_handlers(inst, client)
+                await client.start()
+                return
+            except asyncio.CancelledError:
+                return
+            except Exception as e:  # noqa: BLE001
+                if "expired" in str(e).lower():
+                    log.info("[%s] MAX qr expired, re-issuing", inst.name)
+                    continue
+                inst.stage = "error"
+                inst.error = f"qr_login: {e}"
+                inst.qr_url = None
+                log.exception("[%s] MAX qr worker crashed", inst.name)
+                return
+        inst.stage = "error"
+        inst.error = "qr_login: QR не отсканирован (истёк срок)"
+
+    inst.qr_task = asyncio.create_task(worker())
+    for _ in range(150):
+        if inst.qr_url or (inst.qr_task is not None and inst.qr_task.done()):
+            break
+        await asyncio.sleep(0.1)
+    return {"ok": True, "stage": inst.stage, "qr_url": inst.qr_url}
 
 
 @asynccontextmanager
@@ -1261,7 +1340,7 @@ async def i_recent(name: str, x_api_key: str = Header(default="")):
 
 @app.post("/i/{name}/qr")
 async def i_qr(name: str, x_api_key: str = Header(default="")):
-    """Telegram/VK: начать вход по QR-коду (как в WhatsApp Web)."""
+    """MAX/Telegram/VK: начать вход по QR-коду (как в WhatsApp Web)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
     if inst.type == "telegram":
@@ -1269,12 +1348,14 @@ async def i_qr(name: str, x_api_key: str = Header(default="")):
         return await TG.qr_start(inst)
     if inst.type == "vk":
         return await VK.qr_start(inst)
-    raise HTTPException(status_code=400, detail="qr: только telegram/vk-инстансы")
+    if inst.type == "max":
+        return await max_qr_start(inst)
+    raise HTTPException(status_code=400, detail="qr: только max/telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/qr.png")
 async def i_qr_png(name: str, x_api_key: str = Header(default="")):
-    """Telegram/VK: текущий QR-код картинкой PNG."""
+    """MAX/Telegram/VK: текущий QR-код картинкой PNG."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
     if inst.type == "telegram":
@@ -1284,7 +1365,12 @@ async def i_qr_png(name: str, x_api_key: str = Header(default="")):
         return Response(content=TG.qr_png_bytes(url), media_type="image/png")
     if inst.type == "vk":
         return Response(content=await VK.qr_png_bytes(inst), media_type="image/png")
-    raise HTTPException(status_code=400, detail="qr: только telegram/vk-инстансы")
+    if inst.type == "max":
+        url = inst.qr_url
+        if not url:
+            raise HTTPException(status_code=404, detail="нет активного qr")
+        return Response(content=TG.qr_png_bytes(url), media_type="image/png")
+    raise HTTPException(status_code=400, detail="qr: только max/telegram/vk-инстансы")
 
 
 @app.get("/i/{name}/getFile")
