@@ -284,6 +284,29 @@ async def qr_start(inst: Any) -> dict:
                 continue  # токен истёк, генерируем новый
             except asyncio.CancelledError:
                 return
+            except errors.SessionPasswordNeededError:
+                # QR отсканирован, но включён облачный пароль (2FA):
+                # ждём пароль из pw_queue (UI: POST /i/{name}/password)
+                inst.stage = "awaiting_password"
+                inst.hint = "Облачный пароль Telegram"
+                log.info("[%s] qr scanned, 2fa password required", inst.name)
+                try:
+                    pw = await asyncio.wait_for(inst.pw_queue.get(), timeout=300)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    inst.stage = "error"
+                    inst.error = "timeout waiting for 2FA password"
+                    return
+                try:
+                    me = await client.sign_in(password=pw)
+                except Exception as e:  # noqa: BLE001
+                    inst.stage = "awaiting_password"
+                    inst.hint = f"Пароль отклонён: {e}"
+                    inst.error = None
+                    log.warning("[%s] 2fa password rejected: %s", inst.name, e)
+                    return
+                me = await client.get_me()
+                await _mark_authorized(inst, me)
+                return
             me = await client.get_me()
             await _mark_authorized(inst, me)
             return
