@@ -422,7 +422,7 @@ function ensureChannelCards(){
     card.append(lb);
 
     const addrow=document.createElement('div');addrow.className='row';addrow.style.marginTop='12px';
-    const inp=document.createElement('input');inp.placeholder='имя нового аккаунта (латиницей)';
+    const inp=document.createElement('input');inp.placeholder='имя нового аккаунта: латиница/цифры, напр. 89534930196 (можно с +7)';
     const btn=document.createElement('button');btn.className='btn';btn.textContent='Добавить аккаунт';
     btn.onclick=()=>createInst(ch.t,inp);
     addrow.append(inp,btn);card.append(addrow);
@@ -430,7 +430,7 @@ function ensureChannelCards(){
     const hint=document.createElement('div');hint.className='hint';
     hint.textContent={max:'MAX: код из SMS или QR (приложение MAX → Настройки → Устройства). 2FA-пароль запросится, если он установлен на аккаунте.',
       telegram:'Telegram: код приходит в приложение, или QR (Настройки → Устройства). Облачный пароль запросится, если установлен.',
-      vk:'ВК: телефон + пароль страницы, или QR (приложение ВК → Настройки → Вход по QR). Код — из SMS/приложения.'}[ch.t];
+      vk:'ВК: введите телефон И пароль страницы → «Запросить код» → код из SMS/приложения. Или QR (приложение ВК → Настройки → Вход по QR). Один и тот же номер можно добавить и в MAX, и в ВК — имя возьмётся с суффиксом канала.'}[ch.t];
     card.append(hint);
 
     box.append(card);
@@ -589,14 +589,47 @@ async function saveHook(t){
     toast('Вебхук сохранён: '+name);refreshCh(t,name);loadHooks();
   }catch(e){toast('Ошибка: '+e.message);}
 }
+/* Имя аккаунта приводим к допустимому виду сами: телефон с +7, пробелы, скобки,
+   дефисы и кириллица превращаются в валидное имя (латиница/цифры). */
+function sanitizeInstName(raw){
+  const ru={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+  raw=(raw||'').trim().toLowerCase().replace(/[а-яё]/g,c=>ru[c]||'');
+  /* телефон («+7 999 123-45-67») чистим до цифр; имена с буквами оставляем как есть (дефисы легальны) */
+  const looksPhone=/^[+0-9\s()\-–—]*$/.test(raw);
+  return (looksPhone?raw.replace(/[+\s()\-–—]+/g,''):raw)
+    .replace(/[^a-z0-9_-]/g,'')
+    .replace(/^-+|-+$/g,'').slice(0,32);
+}
 async function createInst(t,inp){
-  const name=inp.value.trim().toLowerCase();
-  if(!name) return toast('Введите имя аккаунта');
-  try{
-    const r=await api('/admin/instances','POST',{name,type:t});
+  let name=sanitizeInstName(inp.value);
+  if(!name) return toast('Введите имя аккаунта: латиница или цифры, например 89534930196');
+  const ex=INSTMAP[name];
+  if(ex&&ex.type===t){ /* аккаунт этого канала уже есть — просто выбираем его */
     CUR=name;SELCH[t]=name;
     localStorage.setItem(LS_CUR,CUR);localStorage.setItem(LS_SELCH,JSON.stringify(SELCH));
-    toast('Аккаунт создан. Ключ для n8n: '+r.api_key,10000);
+    inp.value='';updateSections();loadRecent();
+    toast(`Аккаунт «${name}» уже есть — выбрал его. Войдите по телефону/QR ниже.`);
+    return;
+  }
+  if(ex&&ex.type!==t){ /* имя занято другим каналом — добавляем суффикс канала */
+    const suf={max:'max',telegram:'tg',vk:'vk'}[t];
+    name=name.length+suf.length+1<=32?name+'-'+suf:name.slice(0,31-suf.length)+'-'+suf;
+    let n=2;
+    while(INSTMAP[name]&&INSTMAP[name].type!==t) name=name.replace(/-\d+$/,'')+'-'+(n++);
+    if(INSTMAP[name]&&INSTMAP[name].type===t){
+      CUR=name;SELCH[t]=name;
+      localStorage.setItem(LS_CUR,CUR);localStorage.setItem(LS_SELCH,JSON.stringify(SELCH));
+      inp.value='';updateSections();loadRecent();
+      toast(`Аккаунт «${name}» уже есть — выбрал его.`);
+      return;
+    }
+  }
+  try{
+    const r=await api('/admin/instances','POST',{name,type:t});
+    const finalName=r.name||name; /* бэкенд мог подчистить имя — берём фактическое */
+    CUR=finalName;SELCH[t]=finalName;
+    localStorage.setItem(LS_CUR,CUR);localStorage.setItem(LS_SELCH,JSON.stringify(SELCH));
+    toast(`Аккаунт «${finalName}» создан. Введите телефон и код ниже для входа. Ключ для n8n: ${r.api_key}`,10000);
     inp.value='';
     loadOverview();loadRecent();
   }catch(e){toast('Ошибка: '+e.message);}

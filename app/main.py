@@ -1384,9 +1384,14 @@ async def admin_overview(x_api_key: str = Header(default="")):
 async def create_instance(body: CreateInstBody, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
     require_perm("create")
-    name = body.name.strip().lower()
+    raw = (body.name or "").strip().lower()
+    # телефон («+7 999 123-45-67») чистим до цифр; имена с буквами оставляем как есть (дефисы легальны)
+    name = re.sub(r"[+\s()\-–—]+", "", raw) if re.fullmatch(r"[+0-9\s()\-–—]*", raw) else raw
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
-        raise HTTPException(status_code=400, detail="name: a-z, 0-9, _ - до 32 символов")
+        raise HTTPException(
+            status_code=400,
+            detail="имя аккаунта: только латиница и цифры (до 32 символов). "
+                   "Пример: 89534930196 или moy-max. Телефон можно вводить с +7 — плюс уберём сами")
     itype = (body.type or "max").strip().lower()
     if itype not in ("max", "telegram", "vk"):
         raise HTTPException(status_code=400, detail="type: max | telegram | vk")
@@ -1396,7 +1401,15 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
             detail="vk: канал не входит в эту сборку (пересоберите с INSTALL_VK=1)",
         )
     if name in INSTANCES:
-        raise HTTPException(status_code=409, detail="instance already exists")
+        ex = INSTANCES[name]
+        ex_kind = {"max": "MAX", "telegram": "Telegram", "vk": "ВК"}.get(ex.type, ex.type)
+        suf = {"max": "max", "telegram": "tg", "vk": "vk"}[itype]
+        base = name[: 32 - len(suf) - 1] if len(name) + len(suf) + 1 > 32 else name
+        suggest = f"{base}-{suf}"
+        raise HTTPException(
+            status_code=409,
+            detail=f"имя «{name}» уже занято ({ex_kind}-аккаунт). "
+                   f"Для нового канала возьмите другое имя, например «{suggest}»")
     inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,
                 webhook_url=body.webhook_url.rstrip("/"), type=itype)
     INSTANCES[name] = inst
