@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAX Шлюз · Сообщения</title>
+<title>MAX Шлюз · Кабинеты</title>
 <style>
   :root {
     --bg:#eef1f5; --win:#fff; --line:#e4e7ee; --ink:#20263b; --mut:#7a8299;
@@ -29,10 +29,15 @@
   .page { display:none; padding:20px; max-width:1280px; margin:0 auto; }
   .page.active { display:block; }
 
-  /* ---------- Инстансы (старый функционал, светлый стиль) ---------- */
+  /* ---------- Инстансы ---------- */
   .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; }
+  .grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-bottom:14px; }
   .card { background:var(--win); border:1px solid var(--line); border-radius:12px; padding:16px; }
-  .card h2 { font-size:13px; color:var(--mut); text-transform:uppercase; letter-spacing:.5px; margin-bottom:12px; }
+  .card h2 { font-size:13px; color:var(--mut); text-transform:uppercase; letter-spacing:.5px; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .card h2 .tag { font-size:10px; padding:2px 8px; border-radius:6px; text-transform:none; letter-spacing:0; }
+  .tag.max { background:var(--maxbg); color:var(--maxtx); }
+  .tag.tg { background:var(--tgbg); color:var(--tgtx); }
+  .tag.vk { background:var(--vkbg); color:var(--vktx); }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   input, select { flex:1; min-width:140px; background:#fff; border:1px solid #d6dbe6; border-radius:8px; color:var(--ink); padding:9px 12px; font-size:14px; }
   input:focus, select:focus { outline:none; border-color:var(--dark2); }
@@ -40,6 +45,7 @@
   .btn:hover { background:var(--dark2); }
   .btn.ghost { background:#fff; border:1px solid #d6dbe6; color:#4a5470; font-weight:500; }
   .btn.danger { background:#fff; border:1px solid rgba(220,60,60,.4); color:#d43c3c; font-weight:500; }
+  .btn.sm { padding:6px 12px; font-size:12px; }
   .hint { color:var(--mut); font-size:12.5px; margin-top:8px; line-height:1.5; }
   .kv { display:grid; grid-template-columns:150px 1fr; gap:6px 12px; font-size:13.5px; }
   .kv b { color:var(--mut); font-weight:500; }
@@ -48,6 +54,11 @@
   .inst.active { border-color:var(--dark); background:var(--sel); }
   .inst .nm { font-weight:600; font-size:14px; }
   .inst .sub { color:var(--mut); font-size:12.5px; }
+  .ibtns { display:flex; gap:2px; align-items:center; flex:none; }
+  .ibtn { background:none; border:none; font-size:14px; padding:4px 6px; border-radius:6px; color:#8892aa; }
+  .ibtn:hover { background:#f0f2f8; }
+  .ibtn.del:hover { background:rgba(220,60,60,.1); color:#d43c3c; }
+  .noinst { color:var(--soft); font-size:12.5px; padding:8px 2px; }
   .msg { border:1px solid var(--line); border-radius:10px; padding:9px 12px; margin-bottom:7px; font-size:13.5px; }
   .msg .meta { color:var(--soft); font-size:12px; margin-bottom:3px; word-break:break-word; }
   code { background:#f1f3f8; border:1px solid var(--line); padding:1px 6px; border-radius:6px; font-size:12.5px; word-break:break-all; }
@@ -108,6 +119,24 @@
   /* ---------- Вебхуки ---------- */
   .hookrow { display:flex; gap:8px; margin-bottom:10px; align-items:center; }
   .hookrow .nm { width:130px; font-weight:600; font-size:13.5px; flex:none; }
+
+  /* ---------- Салоны ---------- */
+  .shead { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:8px; }
+  .sname { font-weight:700; font-size:15px; }
+  .sphone { color:var(--mut); font-size:13px; margin-top:2px; }
+  .sactions { display:flex; gap:6px; flex:none; }
+  .sedit { background:none; border:1px solid #d6dbe6; border-radius:7px; color:#4a5470; font-size:12px; padding:5px 10px; }
+  .sedit:hover { border-color:var(--dark2); color:var(--dark); }
+  .keyrow { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .keyrow code { flex:1; min-width:200px; }
+  .pillbox { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+  .pill { font-size:12px; background:#f1f3f8; border:1px solid var(--line); border-radius:999px; padding:3px 6px 3px 10px; display:flex; gap:6px; align-items:center; }
+  .pill button { background:none; border:none; color:#8892aa; font-size:12px; padding:0 4px; }
+  .pill button:hover { color:#d43c3c; }
+  .permrow { display:flex; flex-wrap:wrap; gap:8px 16px; margin:10px 0; font-size:13px; color:#4a5470; }
+  .permrow label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  .permrow input { flex:none; min-width:0; width:15px; height:15px; accent-color:var(--dark); }
+  .saloncard { margin-bottom:14px; }
 </style>
 </head>
 <body>
@@ -118,6 +147,7 @@
     <button class="tab" data-tab="inst" onclick="showTab('inst')">Инстансы</button>
     <button class="tab active" data-tab="msg" onclick="showTab('msg')">💬 Сообщения</button>
     <button class="tab" data-tab="hooks" onclick="showTab('hooks')">Вебхуки</button>
+    <button class="tab" data-tab="salons" id="tabSalons" onclick="showTab('salons')">👥 Салоны</button>
   </div>
   <div class="whoami"><span id="gBadge" class="badge warn">…</span><span id="connInfo"></span></div>
 </div>
@@ -126,34 +156,22 @@
   <div id="keyCard" class="card" style="max-width:560px;margin:0 auto 14px">
     <h2>Подключение</h2>
     <div class="row">
-      <input id="adminKey" placeholder="Админ-ключ (MAXGW_API_KEY из .env)" type="password">
+      <input id="adminKey" placeholder="Ключ администратора или ключ кабинета" type="password">
       <button class="btn" onclick="saveKey()">Войти</button>
     </div>
   </div>
 
   <div id="instPanels" class="hidden">
+    <div id="chSections" class="grid3"></div>
+
     <div class="grid2">
       <div class="card">
-        <h2>Аккаунты (инстансы)</h2>
-        <div id="instList"></div>
-        <div class="row" style="margin-top:10px">
-          <input id="newName" placeholder="Имя нового инстанса" style="min-width:120px">
-          <select id="newType" style="min-width:110px">
-            <option value="max">MAX</option>
-            <option value="telegram">Telegram</option>
-            <option value="vk" id="optVk" style="display:none">ВК</option>
-          </select>
-          <button class="btn" onclick="createInst()">Добавить</button>
+        <h2>Аккаунт: <span id="curName">—</span></h2>
+        <div class="kv" id="statusKv" style="margin-bottom:12px"></div>
+        <div class="row" style="margin-bottom:8px">
+          <input id="whInput" placeholder="Вебхук (URL n8n или другого получателя)">
+          <button class="btn sm" id="whBtn" onclick="saveWh()">💾 Вебхук</button>
         </div>
-      </div>
-
-      <div class="card">
-        <h2>Статус: <span id="curName">—</span></h2>
-        <div class="kv" id="statusKv"></div>
-      </div>
-
-      <div class="card">
-        <h2>Вход в аккаунт</h2>
         <div class="row" style="margin-bottom:8px">
           <input id="phone" placeholder="Телефон, напр. +79990000000">
           <button class="btn" onclick="doLogin()">Запросить код</button>
@@ -173,25 +191,26 @@
         <div class="row hidden" id="qrRow" style="margin-bottom:8px">
           <img id="qrImg" alt="QR" style="background:#fff;padding:8px;border-radius:8px;height:220px;width:220px">
         </div>
-        <div class="row"><button class="btn ghost" onclick="startQr()">Вход по QR</button></div>
+        <div class="row" style="margin-bottom:8px"><button class="btn ghost" onclick="startQr()">Вход по QR</button></div>
+        <div class="row"><button class="btn danger" onclick="doReset()">Сбросить сессию</button></div>
         <div class="hint">Telegram: код приходит в приложение. QR: телефон → Telegram → Настройки → Устройства. MAX: приложение MAX → Настройки → Устройства → сканировать QR. ВК: приложение ВК → Профиль → Настройки → Вход по QR.</div>
       </div>
 
-      <div class="card">
-        <h2>Тестовая отправка</h2>
-        <div class="row" style="margin-bottom:8px"><input id="toPhone" placeholder="Телефон получателя"></div>
-        <div class="row" style="margin-bottom:8px"><input id="toChat" placeholder="или chat_id"></div>
-        <div class="row">
-          <input id="outText" placeholder="Текст сообщения">
-          <button class="btn" onclick="doSend()">Отправить</button>
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <h2>Тестовая отправка</h2>
+          <div class="row" style="margin-bottom:8px"><input id="toPhone" placeholder="Телефон получателя"></div>
+          <div class="row" style="margin-bottom:8px"><input id="toChat" placeholder="или chat_id"></div>
+          <div class="row">
+            <input id="outText" placeholder="Текст сообщения">
+            <button class="btn" onclick="doSend()">Отправить</button>
+          </div>
         </div>
-        <div class="row" style="margin-top:10px"><button class="btn danger" onclick="doReset()">Сбросить сессию</button></div>
-      </div>
-
-      <div class="card">
-        <h2>Последние входящие (живой лог)</h2>
-        <div id="recent"></div>
-        <div class="row" style="margin-top:10px"><button class="btn ghost" onclick="loadRecent()">Обновить</button></div>
+        <div class="card">
+          <h2>Последние входящие (живой лог)</h2>
+          <div id="recent"></div>
+          <div class="row" style="margin-top:10px"><button class="btn ghost" onclick="loadRecent()">Обновить</button></div>
+        </div>
       </div>
     </div>
   </div>
@@ -253,6 +272,19 @@
   </div>
 </div>
 
+<div class="page" id="page-salons">
+  <div class="card" style="max-width:760px;margin-bottom:14px">
+    <h2>Пригласить салон</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input id="salonName" placeholder="Название салона, напр. «Лика»">
+      <input id="salonPhone" placeholder="Телефон, напр. +79990000000">
+      <button class="btn" onclick="inviteSalon()">Создать кабинет</button>
+    </div>
+    <div class="hint">Создаётся личный кабинет: ключ доступа отправьте салону, он входит им на вкладке «Инстансы» и видит только свои аккаунты и сообщения.</div>
+  </div>
+  <div id="salonsList" style="max-width:760px"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -262,9 +294,17 @@ let INSTMAP={};            // name -> {type,phone,stage,connected}
 let FILTER='all', SEARCHQ='';
 let SEL=null;              // {inst, chat_key, title}
 let OLDEST=null;
+let ROLE='admin', PERMS=null, SALONINFO=null, HEALTH={};
+const CHANNELS=[
+  {t:'max', title:'MAX', tag:'max', kind:'MAX'},
+  {t:'telegram', title:'Telegram', tag:'tg', kind:'Telegram'},
+  {t:'vk', title:'ВКонтакте', tag:'vk', kind:'ВК'}
+];
+const PERMTITLES={create:'Добавлять аккаунты', delete:'Удалять аккаунты', webhook:'Вебхуки', history:'Импорт истории', send:'Отправка сообщений'};
 
 function toast(t,ms=3500){const el=document.getElementById('toast');el.textContent=t;el.style.display='block';setTimeout(()=>el.style.display='none',ms);}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function can(p){return ROLE==='admin'||(PERMS&&!!PERMS[p]);}
 async function api(path,method='GET',body=null){
   const r=await fetch(path,{method,headers:{...(KEY&&{'X-Api-Key':KEY}),'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
   const j=await r.json().catch(()=>({}));
@@ -276,34 +316,34 @@ function showTab(t){
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+t));
   if(t==='msg') loadChats();
   if(t==='hooks') loadHooks();
+  if(t==='salons') loadSalons();
 }
 
-/* ================= Инстансы (прежняя логика) ================= */
+/* ================= Инстансы ================= */
 function saveKey(){KEY=document.getElementById('adminKey').value.trim();localStorage.setItem(LS_ADMIN,KEY);loadOverview();}
+function applyRole(){
+  document.getElementById('tabSalons').style.display=ROLE==='admin'?'':'none';
+  const who=document.getElementById('connInfo');
+  if(ROLE==='salon'&&SALONINFO) who.textContent=`кабинет: ${SALONINFO.name}`;
+  const sb=document.getElementById('syncBtn'); if(sb) sb.style.display=can('history')?'':'none';
+}
 async function loadOverview(){
   try{
     const r=await api('/admin/overview');
+    ROLE=r.role||'admin'; PERMS=r.perms||null; SALONINFO=r.salon||null;
     document.getElementById('keyCard').classList.add('hidden');
     document.getElementById('instPanels').classList.remove('hidden');
-    api('/health').then(h=>{document.getElementById('optVk').style.display=h.vk?'':'none';}).catch(()=>{});
+    applyRole();
+    api('/health').then(h=>{HEALTH=h;renderSections();}).catch(()=>{});
     INSTMAP={};
     if(!r.instances.length) CUR='';
     if(!CUR&&r.instances.length) CUR=r.instances[0].name;
     if(!r.instances.some(i=>i.name===CUR)) CUR=r.instances[0]?.name||'';
     localStorage.setItem(LS_CUR,CUR);
-    const list=document.getElementById('instList');list.innerHTML='';
-    for(const i of r.instances){
-      INSTMAP[i.name]=i;
-      const d=document.createElement('div');d.className='inst'+(i.name===CUR?' active':'');
-      const kind=i.type==='telegram'?'Telegram':(i.type==='vk'?'ВК':'MAX');
-      d.innerHTML=`<div><div class="nm">${esc(i.name)}</div><div class="sub">${esc(i.phone||'без телефона')} · ${kind} · ${esc(i.stage)}</div></div>`;
-      const b=document.createElement('span');badgeFor(b,i.stage,i.connected);d.append(b);
-      d.onclick=()=>{CUR=i.name;localStorage.setItem(LS_CUR,CUR);loadOverview();refresh();loadRecent();};
-      list.append(d);
-    }
+    renderSections();
     if(CUR) refresh();
     const on=Object.values(INSTMAP).filter(i=>i.connected).length;
-    document.getElementById('connInfo').textContent=` · ${on}/${r.instances.length} онлайн`;
+    document.getElementById('connInfo').textContent=(ROLE==='salon'&&SALONINFO?`кабинет: ${SALONINFO.name} · `:'')+` · ${on}/${r.instances.length} онлайн`;
   }catch(e){
     if(String(e.message).includes('401')||String(e.message).includes('key')){
       document.getElementById('keyCard').classList.remove('hidden');
@@ -320,16 +360,60 @@ function badgeFor(el,stage,connected){
   else if(stage==='error'){el.textContent='ошибка';el.className='badge err';}
   else{el.textContent=stage||'—';el.className='badge warn';}
 }
-async function createInst(){
-  const name=document.getElementById('newName').value.trim().toLowerCase();
-  if(!name) return toast('Введите имя инстанса');
-  const type=document.getElementById('newType').value;
+function renderSections(){
+  const box=document.getElementById('chSections');box.innerHTML='';
+  for(const ch of CHANNELS){
+    if(ch.t==='vk'&&HEALTH.vk===false) continue;
+    const list=Object.values(INSTMAP).filter(i=>i.type===ch.t);
+    const card=document.createElement('div');card.className='card';
+    const h=document.createElement('h2');
+    h.innerHTML=`<span class="tag ${ch.tag}">${ch.kind}</span> аккаунты <span style="color:var(--soft)">· ${list.length}</span>`;
+    card.append(h);
+    for(const i of list){
+      INSTMAP[i.name]=i;
+      const d=document.createElement('div');d.className='inst'+(i.name===CUR?' active':'');
+      const left=document.createElement('div');
+      left.innerHTML=`<div class="nm">${esc(i.name)}</div><div class="sub">${esc(i.phone||'без телефона')} · ${esc(i.stage)}</div>`;
+      left.onclick=()=>{CUR=i.name;localStorage.setItem(LS_CUR,CUR);loadOverview();refresh();loadRecent();};
+      const right=document.createElement('div');right.className='ibtns';
+      const b=document.createElement('span');badgeFor(b,i.stage,i.connected);
+      right.append(b);
+      if(can('delete')){
+        const del=document.createElement('button');del.className='ibtn del';del.title='Удалить аккаунт';del.textContent='🗑';
+        del.onclick=(ev)=>{ev.stopPropagation();deleteInst(i.name);};
+        right.append(del);
+      }
+      d.append(left,right);card.append(d);
+    }
+    if(!list.length){const e=document.createElement('div');e.className='noinst';e.textContent='Пока нет аккаунтов';card.append(e);}
+    if(can('create')){
+      const addrow=document.createElement('div');addrow.className='row';addrow.style.marginTop='10px';
+      const inp=document.createElement('input');inp.placeholder='имя нового аккаунта (латиницей)';
+      const btn=document.createElement('button');btn.className='btn';btn.textContent='Добавить';
+      btn.onclick=()=>createInst(ch.t,inp);
+      addrow.append(inp,btn);card.append(addrow);
+    }
+    box.append(card);
+  }
+}
+async function createInst(type,inp){
+  const name=inp.value.trim().toLowerCase();
+  if(!name) return toast('Введите имя аккаунта');
   try{
     const r=await api('/admin/instances','POST',{name,type});
     CUR=name;localStorage.setItem(LS_CUR,CUR);
-    toast('Создан инстанс '+name+' ('+type+'). Ключ: '+r.api_key,8000);
-    document.getElementById('newName').value='';
+    toast('Аккаунт создан. Ключ для n8n: '+r.api_key,10000);
+    inp.value='';
     loadOverview();loadRecent();
+  }catch(e){toast('Ошибка: '+e.message);}
+}
+async function deleteInst(name){
+  if(!confirm(`Удалить аккаунт «${name}»?\nСессия и данные аккаунта будут стёрты, вебхук отключится.`)) return;
+  try{
+    await api(`/admin/instances/${name}`,'DELETE');
+    if(CUR===name){CUR='';localStorage.setItem(LS_CUR,'');}
+    toast('Аккаунт удалён: '+name);
+    loadOverview();loadHooks();
   }catch(e){toast('Ошибка: '+e.message);}
 }
 async function refresh(){
@@ -342,9 +426,14 @@ async function refresh(){
     const kv=document.getElementById('statusKv');kv.innerHTML='';
     const rows=[['Тип',s.type==='telegram'?'Telegram':(s.type==='vk'?'ВК':'MAX')],
       ['Состояние',s.stage],['Телефон',s.phone||'—'],['User ID',s.me||'—'],
-      ['Соединение',s.connected?'онлайн':'офлайн'],['Вебхук',s.webhook_url_set?'настроен':'не настроен']];
+      ['Соединение',s.connected?'онлайн':'офлайн'],
+      ['Вебхук',s.webhook_url_set?'настроен':'не настроен']];
     if(s.error) rows.push(['Ошибка',s.error]);
     for(const[k,v]of rows){const b=document.createElement('b');b.textContent=k;const d=document.createElement('div');d.textContent=String(v);kv.append(b,d);}
+    const wh=document.getElementById('whInput');
+    if(document.activeElement!==wh) wh.value=s.webhook_url||'';
+    document.getElementById('whBtn').style.display=can('webhook')?'':'none';
+    wh.readOnly=!can('webhook');
     document.getElementById('codeRow').classList.toggle('hidden',s.stage!=='awaiting_code'&&s.stage!=='awaiting_qr');
     document.getElementById('pwRow').classList.toggle('hidden',s.stage!=='awaiting_password');
     document.getElementById('vkPwRow').classList.toggle('hidden',s.type!=='vk');
@@ -352,6 +441,13 @@ async function refresh(){
     document.getElementById('qrRow').classList.toggle('hidden',s.stage!=='awaiting_qr');
     if(s.stage==='awaiting_qr') updateQrImg();
   }catch(e){console.error(e);}
+}
+async function saveWh(){
+  if(!CUR) return toast('Выберите аккаунт');
+  try{
+    await api(`/admin/instances/${CUR}/webhook`,'POST',{url:document.getElementById('whInput').value.trim()});
+    toast('Вебхук сохранён: '+CUR);refresh();
+  }catch(e){toast('Ошибка: '+e.message);}
 }
 async function doLogin(){
   const body={phone:document.getElementById('phone').value};
@@ -388,7 +484,7 @@ async function doSend(){
   catch(e){toast('Ошибка: '+e.message);}
 }
 async function doReset(){
-  if(!confirm('Сбросить сессию инстанса '+CUR+'?')) return;
+  if(!confirm('Сбросить сессию аккаунта '+CUR+'?')) return;
   try{await api(`/i/${CUR}/reset`,'POST');toast('Сессия сброшена');refresh();}catch(e){toast('Ошибка: '+e.message);}
 }
 async function loadRecent(){
@@ -420,11 +516,101 @@ async function loadHooks(){
       const kind=i.type==='telegram'?'TG':(i.type==='vk'?'ВК':'MAX');
       d.innerHTML=`<span class="nm">${esc(i.name)} <small style="color:var(--mut)">(${kind})</small></span>`;
       const inp=document.createElement('input');inp.value=i.webhook_url||'';inp.placeholder='https://…';
+      if(!can('webhook')) inp.readOnly=true;
       const btn=document.createElement('button');btn.className='btn';btn.textContent='Сохранить';
+      btn.style.display=can('webhook')?'':'none';
       btn.onclick=async()=>{try{await api(`/admin/instances/${i.name}/webhook`,'POST',{url:inp.value.trim()});toast('Вебхук '+i.name+' сохранён');}catch(e){toast('Ошибка: '+e.message);}};
       d.append(inp,btn);box.append(d);
     }
+    if(!r.instances.length) box.innerHTML='<div class="hint">Нет аккаунтов.</div>';
   }catch(e){toast('Ошибка: '+e.message);}
+}
+
+/* ================= Салоны ================= */
+let SALONS=[];
+async function loadSalons(){
+  if(ROLE!=='admin') return;
+  try{
+    const r=await api('/admin/salons');
+    SALONS=r.salons||[];
+    renderSalons();
+  }catch(e){toast('Ошибка: '+e.message);}
+}
+function copyText(t){
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject())
+    .then(()=>toast('Скопировано')).catch(()=>{toast(t,8000);});
+}
+async function inviteSalon(){
+  const name=document.getElementById('salonName').value.trim();
+  const phone=document.getElementById('salonPhone').value.trim();
+  if(!name) return toast('Введите название салона');
+  try{
+    const r=await api('/admin/salons','POST',{name,phone});
+    document.getElementById('salonName').value='';document.getElementById('salonPhone').value='';
+    toast('Кабинет создан. Ключ доступа: '+r.salon.access_key,15000);
+    loadSalons();
+  }catch(e){toast('Ошибка: '+e.message);}
+}
+function renderSalons(){
+  const box=document.getElementById('salonsList');box.innerHTML='';
+  if(!SALONS.length){box.innerHTML='<div class="card"><div class="hint">Кабинетов пока нет. Создайте первый выше.</div></div>';return;}
+  const allInsts=Object.keys(INSTMAP).sort();
+  for(const s of SALONS){
+    const card=document.createElement('div');card.className='card saloncard';
+    const head=document.createElement('div');head.className='shead';
+    const lft=document.createElement('div');
+    lft.innerHTML=`<div class="sname">${esc(s.name)}</div><div class="sphone">${esc(s.phone||'телефон не указан')} · ${s.instances.length} аккаунт(ов) · id ${esc(s.id)}</div>`;
+    const act=document.createElement('div');act.className='sactions';
+    const ren=document.createElement('button');ren.className='sedit';ren.textContent='✎ Название';
+    ren.onclick=async()=>{const v=prompt('Новое название салона:',s.name);if(v&&v.trim()){try{await api(`/admin/salons/${s.id}`,'PATCH',{name:v.trim()});loadSalons();}catch(e){toast('Ошибка: '+e.message);}}};
+    const ph=document.createElement('button');ph.className='sedit';ph.textContent='✎ Телефон';
+    ph.onclick=async()=>{const v=prompt('Новый телефон салона:',s.phone||'');if(v!==null){try{await api(`/admin/salons/${s.id}`,'PATCH',{phone:v.trim()});loadSalons();}catch(e){toast('Ошибка: '+e.message);}}};
+    const del=document.createElement('button');del.className='sedit';del.style.color='#d43c3c';del.textContent='Удалить';
+    del.onclick=async()=>{if(!confirm(`Удалить кабинет «${s.name}»? Аккаунты останутся, но отвяжутся.`))return;try{await api(`/admin/salons/${s.id}`,'DELETE');loadSalons();}catch(e){toast('Ошибка: '+e.message);}};
+    act.append(ren,ph,del);head.append(lft,act);card.append(head);
+
+    const key=document.createElement('div');key.className='keyrow';
+    key.innerHTML=`<b style="font-size:12.5px;color:var(--mut)">Ключ кабинета:</b> <code>${esc(s.access_key)}</code>`;
+    const cp=document.createElement('button');cp.className='btn ghost sm';cp.textContent='Копировать';cp.onclick=()=>copyText(s.access_key);
+    const rk=document.createElement('button');rk.className='btn ghost sm';rk.textContent='Новый ключ';
+    rk.onclick=async()=>{if(!confirm('Выдать новый ключ? Старый перестанет работать.'))return;try{await api(`/admin/salons/${s.id}/resetKey`,'POST');loadSalons();}catch(e){toast('Ошибка: '+e.message);}};
+    key.append(cp,rk);card.append(key);
+
+    const pb=document.createElement('div');pb.className='pillbox';
+    if(s.instances.length){
+      for(const n of s.instances){
+        const p=document.createElement('span');p.className='pill';
+        p.innerHTML=`${esc(n)} <button title="Отвязать">×</button>`;
+        p.querySelector('button').onclick=async()=>{try{await api(`/admin/salons/${s.id}/attach`,'POST',{instance:n,detach:true});loadSalons();}catch(e){toast('Ошибка: '+e.message);}};
+        pb.append(p);
+      }
+    }else{
+      const e=document.createElement('span');e.className='noinst';e.textContent='Аккаунты не привязаны';
+      pb.append(e);
+    }
+    card.append(pb);
+
+    const free=allInsts.filter(n=>!s.instances.includes(n));
+    if(free.length){
+      const ar=document.createElement('div');ar.className='row';
+      const sel=document.createElement('select');
+      for(const n of free){const o=document.createElement('option');o.value=n;o.textContent=n;sel.append(o);}
+      const ab=document.createElement('button');ab.className='btn ghost';ab.textContent='Привязать аккаунт';
+      ab.onclick=async()=>{try{await api(`/admin/salons/${s.id}/attach`,'POST',{instance:sel.value});loadSalons();}catch(e){toast('Ошибка: '+e.message);}};
+      ar.append(sel,ab);card.append(ar);
+    }
+
+    const perm=document.createElement('div');perm.className='permrow';
+    for(const[pk,pt]of Object.entries(PERMTITLES)){
+      const lab=document.createElement('label');
+      const cb=document.createElement('input');cb.type='checkbox';cb.checked=!!(s.perms&&s.perms[pk]);
+      cb.onchange=async()=>{try{await api(`/admin/salons/${s.id}`,'PATCH',{perms:{[pk]:cb.checked}});toast('Разрешение сохранено');}catch(e){toast('Ошибка: '+e.message);cb.checked=!cb.checked;}};
+      lab.append(cb,document.createTextNode(pt));
+      perm.append(lab);
+    }
+    card.append(perm);
+    box.append(card);
+  }
 }
 
 /* ================= Сообщения ================= */
@@ -477,7 +663,7 @@ async function loadChats(){
       box.append(d);
     }
     api('/admin/store/stats').then(s=>{
-      const parts=Object.entries(s.messages).map(([k,v])=>`${k}: ${v}`);
+      const parts=Object.entries(s.messages||{}).map(([k,v])=>`${k}: ${v}`);
       document.getElementById('storeInfo').textContent=parts.length?('в базе: '+parts.join(' · ')):'';
     }).catch(()=>{});
   }catch(e){console.error(e);}
@@ -599,8 +785,8 @@ async function deepSync(){
 
 async function importHistory(){
   const names=Object.entries(INSTMAP).filter(([,i])=>i.stage==='authorized'&&i.type!=='vk').map(([n])=>n);
-  if(!names.length){toast('Нет подключённых инстансов');return;}
-  if(!confirm(`Импортировать историю (${names.join(', ')})?\nДо 50 последних чатов на инстанс, это может занять пару минут.`)) return;
+  if(!names.length){toast('Нет подключённых аккаунтов');return;}
+  if(!confirm(`Импортировать историю (${names.join(', ')})?\nДо 50 последних чатов на аккаунт, это может занять пару минут.`)) return;
   const btn=document.getElementById('syncBtn');btn.disabled=true;
   let done=0,total=0;
   for(const n of names){

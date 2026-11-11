@@ -11,6 +11,7 @@ FastAPI + PyMax (неофициальный внутренний API MAX).
 
 import asyncio
 import base64
+import contextvars
 import json
 import logging
 import os
@@ -233,6 +234,7 @@ class Inst:
             "error": self.error,
             "connected": self._live_connected(),
             "qr_url": self.qr_url,
+            "webhook_url": self.webhook_url or "",
             "last_incoming": self.last_incoming,
             "last_webhook": self.last_webhook,
         }
@@ -291,6 +293,111 @@ def load_instances() -> None:
     INSTANCES[default.name] = default
     save_instances()
     log.info("migrated single-account install to instance 'default'")
+
+
+# ---------------------------------------------------------------- salons (кабинеты)
+
+SALON_FILE = os.path.join(WORK_DIR, "salons.json")
+SALON_PERMS = ("create", "delete", "webhook", "history", "send")
+
+
+class Salon:
+    """Личный кабинет салона: свой вход, свои аккаунты, свои вебхуки."""
+
+    def __init__(self, id: str, name: str, phone: str = "",
+                 access_key: Optional[str] = None, instances: Optional[list] = None,
+                 perms: Optional[dict] = None, created: Optional[float] = None) -> None:
+        self.id = id
+        self.name = name
+        self.phone = phone
+        self.access_key = access_key or secrets.token_hex(18)
+        self.instances = set(instances or [])
+        self.perms = {p: bool((perms or {}).get(p, True)) for p in SALON_PERMS}
+        self.created = created or time.time()
+
+    def summary(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "phone": self.phone,
+            "access_key": self.access_key,
+            "instances": sorted(self.instances),
+            "perms": dict(self.perms),
+            "created": self.created,
+        }
+
+
+SALONS: dict[str, Salon] = {}
+
+# текущий салон запроса (заполняется require_admin по ключу кабинета)
+_salon_ctx: contextvars.ContextVar = contextvars.ContextVar("salon_ctx",
+                                                            default=None)
+
+
+def save_salons() -> None:
+    data = {"salons": [
+        {
+            "id": s.id,
+            "name": s.name,
+            "phone": s.phone,
+            "access_key": s.access_key,
+            "instances": sorted(s.instances),
+            "perms": dict(s.perms),
+            "created": s.created,
+        }
+        for s in SALONS.values()
+    ]}
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    with open(SALON_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_salons() -> None:
+    if not os.path.exists(SALON_FILE):
+        return
+    with open(SALON_FILE, encoding="utf-8") as f:
+        data = json.load(f)
+    for e in data.get("salons", []):
+        s = Salon(**e)
+        SALONS[s.id] = s
+    if SALONS:
+        log.info("loaded %d salon cabinet(s)", len(SALONS))
+
+
+def salon_by_key(key: str) -> Optional[Salon]:
+    return next((s for s in SALONS.values() if s.access_key and key == s.access_key),
+                None)
+
+
+def cur_salon() -> Optional[Salon]:
+    return _salon_ctx.get()
+
+
+def visible_instances() -> list:
+    s = cur_salon()
+    if s is None:
+        return list(INSTANCES.values())
+    return [INSTANCES[n] for n in sorted(s.instances) if n in INSTANCES]
+
+
+def owns_instance(name: str) -> bool:
+    s = cur_salon()
+    return s is None or name in s.instances
+
+
+def require_perm(perm: str) -> None:
+    s = cur_salon()
+    if s is not None and not s.perms.get(perm, False):
+        raise HTTPException(status_code=403,
+                            detail=f"в кабинете нет разрешения «{perm}»")
+
+
+def require_admin_context(x_api_key: str) -> None:
+    """require_admin + запрет кабинетного ключа управлять салонами."""
+    require_admin(x_api_key)
+    if cur_salon() is not None:
+        raise HTTPException(status_code=403,
+                            detail="доступно только администратору")
 
 
 # ---------------------------------------------------------------- providers
@@ -757,6 +864,7 @@ async def max_qr_start(inst: Inst) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_instances()
+    load_salons()
     for inst in list(INSTANCES.values()):
         if inst.type == "vk":
             if VK is not None:
@@ -847,7 +955,8 @@ if HTTP_PASS:
     async def http_basic_auth(request, call_next):
         xk = request.headers.get("x-api-key", "")
         if xk and (is_admin(xk) or any(i.api_key == xk
-                                       for i in INSTANCES.values())):
+                                       for i in INSTANCES.values())
+                   or salon_by_key(xk) is not None):
             return await call_next(request)  # valid api key: basic not needed
         if _cookie_ok(request):
             _grant_admin(request)
@@ -882,10 +991,17 @@ def is_admin(key: str) -> bool:
 
 
 def require_admin(x_api_key: str) -> None:
-    if not is_admin(x_api_key):
-        log.warning("auth fail (admin): key=%r len=%s",
-                    (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
-        raise HTTPException(status_code=401, detail="bad admin key")
+    """Админ-ключ -> полный доступ. Ключ кабинета -> скоуп своего салона."""
+    if is_admin(x_api_key):
+        _salon_ctx.set(None)
+        return
+    s = salon_by_key(x_api_key)
+    if s is not None:
+        _salon_ctx.set(s)
+        return
+    log.warning("auth fail (admin): key=%r len=%s",
+                (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
+    raise HTTPException(status_code=401, detail="bad admin key")
 
 
 def get_inst(name: str) -> Inst:
@@ -896,10 +1012,16 @@ def get_inst(name: str) -> Inst:
 
 
 def require_inst(x_api_key: str, inst: Inst) -> None:
-    if not (is_admin(x_api_key) or (inst.api_key and x_api_key == inst.api_key)):
-        log.warning("auth fail (%s): key=%r len=%s", inst.name,
-                    (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
-        raise HTTPException(status_code=401, detail="bad api key")
+    if is_admin(x_api_key):
+        return
+    s = cur_salon()
+    if s is not None and s.access_key == x_api_key and inst.name in s.instances:
+        return
+    if inst.api_key and x_api_key == inst.api_key:
+        return
+    log.warning("auth fail (%s): key=%r len=%s", inst.name,
+                (x_api_key[:6] + "…") if x_api_key else None, len(x_api_key))
+    raise HTTPException(status_code=401, detail="bad api key")
 
 
 def require_tg() -> None:
@@ -950,6 +1072,22 @@ class CreateInstBody(BaseModel):
 
 class WebhookBody(BaseModel):
     url: str = ""
+
+
+class SalonCreateBody(BaseModel):
+    name: str
+    phone: str = ""
+
+
+class SalonPatchBody(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    perms: Optional[dict] = None
+
+
+class SalonAttachBody(BaseModel):
+    instance: str
+    detach: bool = False
 
 
 # ---------------------------------------------------------------- actions
@@ -1218,12 +1356,22 @@ async def stt(request: Request, x_api_key: str = Header(default="")):
 @app.get("/admin/overview")
 async def admin_overview(x_api_key: str = Header(default="")):
     require_admin(x_api_key)
-    return {"instances": [i.summary() for i in INSTANCES.values()]}
+    s = cur_salon()
+    if s is not None:
+        return {
+            "role": "salon",
+            "salon": {"id": s.id, "name": s.name, "phone": s.phone},
+            "perms": dict(s.perms),
+            "instances": [INSTANCES[n].summary() for n in sorted(s.instances)
+                          if n in INSTANCES],
+        }
+    return {"role": "admin", "instances": [i.summary() for i in INSTANCES.values()]}
 
 
 @app.post("/admin/instances")
 async def create_instance(body: CreateInstBody, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
+    require_perm("create")
     name = body.name.strip().lower()
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", name):
         raise HTTPException(status_code=400, detail="name: a-z, 0-9, _ - до 32 символов")
@@ -1240,6 +1388,10 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
     inst = Inst(name, phone=normalize_phone(body.phone) if body.phone else None,
                 webhook_url=body.webhook_url.rstrip("/"), type=itype)
     INSTANCES[name] = inst
+    s = cur_salon()
+    if s is not None:
+        s.instances.add(name)
+        save_salons()
     save_instances()
     return {"ok": True, "name": name, "type": itype, "api_key": inst.api_key}
 
@@ -1248,13 +1400,17 @@ async def create_instance(body: CreateInstBody, x_api_key: str = Header(default=
 async def list_instances(x_api_key: str = Header(default="")):
     require_admin(x_api_key)
     return {"instances": [
-        {**i.summary(), "api_key": i.api_key} for i in INSTANCES.values()
+        {**i.summary(), "api_key": i.api_key} for i in visible_instances()
     ]}
 
 
 @app.post("/admin/instances/{name}/webhook")
 async def set_webhook(name: str, body: WebhookBody, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
+    if not owns_instance(name):
+        raise HTTPException(status_code=403,
+                            detail="инстанс не привязан к этому кабинету")
+    require_perm("webhook")
     inst = get_inst(name)
     inst.webhook_url = body.url.rstrip("/")
     save_instances()
@@ -1264,6 +1420,10 @@ async def set_webhook(name: str, body: WebhookBody, x_api_key: str = Header(defa
 @app.delete("/admin/instances/{name}")
 async def delete_instance(name: str, x_api_key: str = Header(default="")):
     require_admin(x_api_key)
+    if not owns_instance(name):
+        raise HTTPException(status_code=403,
+                            detail="инстанс не привязан к этому кабинету")
+    require_perm("delete")
     inst = get_inst(name)
     if inst.type == "vk":
         await VK.act_reset(inst)  # сессия + браузерный профиль + longpoll
@@ -1275,8 +1435,95 @@ async def delete_instance(name: str, x_api_key: str = Header(default="")):
         if os.path.exists(p):
             os.remove(p)
     del INSTANCES[name]
+    for s in SALONS.values():
+        s.instances.discard(name)
+    save_salons()
     save_instances()
     return {"ok": True, "deleted": name}
+
+
+# ---------------------------------------------------------------- routes: salons
+
+
+@app.get("/admin/salons")
+async def salons_list(x_api_key: str = Header(default="")):
+    require_admin_context(x_api_key)
+    return {"salons": [s.summary() for s in SALONS.values()]}
+
+
+@app.post("/admin/salons")
+async def salons_create(body: SalonCreateBody, x_api_key: str = Header(default="")):
+    """Пригласить салон: название + телефон -> кабинет с ключом доступа."""
+    require_admin_context(x_api_key)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="укажите название салона")
+    sid = "s" + secrets.token_hex(4)
+    while sid in SALONS:
+        sid = "s" + secrets.token_hex(4)
+    s = Salon(sid, name, phone=normalize_phone(body.phone) if body.phone else "")
+    SALONS[sid] = s
+    save_salons()
+    return {"ok": True, "salon": s.summary()}
+
+
+@app.patch("/admin/salons/{sid}")
+async def salons_patch(sid: str, body: SalonPatchBody,
+                       x_api_key: str = Header(default="")):
+    """Переименовать кабинет, сменить телефон, выдать/снять разрешения."""
+    require_admin_context(x_api_key)
+    s = SALONS.get(sid)
+    if s is None:
+        raise HTTPException(status_code=404, detail="salon not found")
+    if body.name is not None and body.name.strip():
+        s.name = body.name.strip()
+    if body.phone is not None:
+        s.phone = normalize_phone(body.phone) if body.phone.strip() else ""
+    if body.perms is not None:
+        for k, v in body.perms.items():
+            if k in SALON_PERMS:
+                s.perms[k] = bool(v)
+    save_salons()
+    return {"ok": True, "salon": s.summary()}
+
+
+@app.post("/admin/salons/{sid}/attach")
+async def salons_attach(sid: str, body: SalonAttachBody,
+                        x_api_key: str = Header(default="")):
+    """Привязать/отвязать аккаунт (инстанс) к кабинету салона."""
+    require_admin_context(x_api_key)
+    s = SALONS.get(sid)
+    if s is None:
+        raise HTTPException(status_code=404, detail="salon not found")
+    get_inst(body.instance)
+    if body.detach:
+        s.instances.discard(body.instance)
+    else:
+        s.instances.add(body.instance)
+    save_salons()
+    return {"ok": True, "salon": s.summary()}
+
+
+@app.post("/admin/salons/{sid}/resetKey")
+async def salons_reset_key(sid: str, x_api_key: str = Header(default="")):
+    """Новый ключ доступа кабинета (старый перестаёт работать)."""
+    require_admin_context(x_api_key)
+    s = SALONS.get(sid)
+    if s is None:
+        raise HTTPException(status_code=404, detail="salon not found")
+    s.access_key = secrets.token_hex(18)
+    save_salons()
+    return {"ok": True, "salon": s.summary()}
+
+
+@app.delete("/admin/salons/{sid}")
+async def salons_delete(sid: str, x_api_key: str = Header(default="")):
+    """Удалить кабинет. Аккаунты инстансов не удаляются, просто отвязываются."""
+    require_admin_context(x_api_key)
+    if SALONS.pop(sid, None) is None:
+        raise HTTPException(status_code=404, detail="salon not found")
+    save_salons()
+    return {"ok": True, "deleted": sid}
 
 
 # ---------------------------------------------------------------- routes: per-instance
@@ -1314,6 +1561,7 @@ async def i_password(name: str, body: PasswordBody, x_api_key: str = Header(defa
 async def i_send_text(name: str, body: SendTextBody, x_api_key: str = Header(default="")):
     inst = get_inst(name)
     require_inst(x_api_key, inst)
+    require_perm("send")
     return await act_send_text(inst, body)
 
 
@@ -1321,6 +1569,7 @@ async def i_send_text(name: str, body: SendTextBody, x_api_key: str = Header(def
 async def i_send_photo(name: str, body: SendPhotoBody, x_api_key: str = Header(default="")):
     inst = get_inst(name)
     require_inst(x_api_key, inst)
+    require_perm("send")
     return await act_send_photo(inst, body)
 
 
@@ -1542,6 +1791,15 @@ async def max_sync_history(inst: Inst, per_chat: int = 200,
             "messages": total}
 
 
+def _scoped_insts(insts: str) -> Optional[list]:
+    """Список инстансов для запросов к хранилищу: кабинет видит только свои."""
+    s = cur_salon()
+    if s is not None:
+        return sorted(n for n in s.instances if n in INSTANCES)
+    names = [x for x in insts.split(",") if x]
+    return names or None
+
+
 @app.get("/admin/chats")
 async def admin_chats(insts: str = "", q: str = "", limit: int = 200,
                       unread: int = 0, x_api_key: str = Header(default="")):
@@ -1549,8 +1807,8 @@ async def admin_chats(insts: str = "", q: str = "", limit: int = 200,
     require_admin(x_api_key)
     if STORE is None:
         raise HTTPException(status_code=503, detail="message store unavailable")
-    names = [s for s in insts.split(",") if s] or None
-    return {"items": STORE.list_chats(names, q=q, limit=min(limit, 500),
+    return {"items": STORE.list_chats(_scoped_insts(insts), q=q,
+                                      limit=min(limit, 500),
                                       unread_only=bool(unread))}
 
 
@@ -1562,6 +1820,9 @@ async def admin_thread(inst: str, chat: str, before: Optional[int] = None,
     require_admin(x_api_key)
     if STORE is None:
         raise HTTPException(status_code=503, detail="message store unavailable")
+    if not owns_instance(inst):
+        raise HTTPException(status_code=403,
+                            detail="инстанс не привязан к этому кабинету")
     get_inst(inst)
     items = STORE.get_thread(inst, chat, before_ts=before,
                              limit=min(limit, 200))
@@ -1576,14 +1837,20 @@ async def admin_msgsearch(q: str, insts: str = "", limit: int = 60,
     require_admin(x_api_key)
     if STORE is None:
         raise HTTPException(status_code=503, detail="message store unavailable")
-    names = [s for s in insts.split(",") if s] or None
-    return {"items": STORE.search_messages(names, q=q, limit=min(limit, 200))}
+    return {"items": STORE.search_messages(_scoped_insts(insts), q=q,
+                                           limit=min(limit, 200))}
 
 
 @app.get("/admin/store/stats")
 async def admin_store_stats(x_api_key: str = Header(default="")):
     require_admin(x_api_key)
-    return STORE.stats() if STORE is not None else {"chats": {}, "messages": {}}
+    st = STORE.stats() if STORE is not None else {"chats": {}, "messages": {}}
+    s = cur_salon()
+    if s is not None:
+        own = set(s.instances)
+        st = {k: {n: v for n, v in d.items() if n in own}
+              for k, d in st.items() if isinstance(d, dict)}
+    return st
 
 
 class SyncBody(BaseModel):
@@ -1598,6 +1865,7 @@ async def i_sync_history(name: str, body: Optional[SyncBody] = None,
     """Импорт истории переписки аккаунта в хранилище (Telegram/MAX/VK)."""
     inst = get_inst(name)
     require_inst(x_api_key, inst)
+    require_perm("history")
     if STORE is None:
         raise HTTPException(status_code=503, detail="message store unavailable")
     b = body or SyncBody()
