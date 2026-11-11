@@ -135,6 +135,10 @@ except Exception as _store_err:  # noqa: BLE001
 
 API_KEY = os.environ.get("GATEWAY_API_KEY", "")  # админ-ключ: управление инстансами
 GLOBAL_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
+# Шаблоны вебхуков для кнопок UI: {channel} -> maxgw|tg|vk, {name} -> имя инстанса.
+# Пример: https://n8n.example.ru/webhook/mt-book-{channel}?instance={name}
+HOOK_CLIENT_TPL = os.environ.get("MAXGW_HOOK_CLIENT_TPL", "").strip()
+HOOK_PERSONAL_TPL = os.environ.get("MAXGW_HOOK_PERSONAL_TPL", "").strip()
 WORK_DIR = os.environ.get("WORK_DIR", "/data")
 SESSIONS_DIR = os.path.join(WORK_DIR, "sessions")
 INST_FILE = os.path.join(WORK_DIR, "instances.json")
@@ -721,6 +725,13 @@ def attach_handlers(inst: Inst, c: Client) -> None:
             me_id = c.me.contact.id
         except Exception:  # noqa: BLE001
             pass
+        if not inst.phone:
+            try:  # QR-вход: телефон берём из своего контакта
+                ph = getattr(c.me.contact, "phone", None)
+                if ph:
+                    inst.phone = normalize_phone(str(ph))
+            except Exception:  # noqa: BLE001
+                pass
         inst.stage = "authorized"
         inst.connected = True
         inst.me = me_id
@@ -875,10 +886,8 @@ async def lifespan(app: FastAPI):
                     inst.error = str(e)
                     log.warning("vk boot %s failed: %s", inst.name, e)
             continue
-        has_session = inst.phone or (
-            inst.type == "telegram"
-            and os.path.exists(os.path.join(SESSIONS_DIR, inst.name + ".session"))
-        )
+        has_session = inst.phone or os.path.exists(os.path.join(
+            SESSIONS_DIR, inst.name + (".db" if inst.type == "max" else ".session")))
         if has_session:
             try:
                 await start_client(inst)
@@ -1362,10 +1371,13 @@ async def admin_overview(x_api_key: str = Header(default="")):
             "role": "salon",
             "salon": {"id": s.id, "name": s.name, "phone": s.phone},
             "perms": dict(s.perms),
+            "hookpresets": {"client": HOOK_CLIENT_TPL, "personal": HOOK_PERSONAL_TPL},
             "instances": [INSTANCES[n].summary() for n in sorted(s.instances)
                           if n in INSTANCES],
         }
-    return {"role": "admin", "instances": [i.summary() for i in INSTANCES.values()]}
+    return {"role": "admin",
+            "hookpresets": {"client": HOOK_CLIENT_TPL, "personal": HOOK_PERSONAL_TPL},
+            "instances": [i.summary() for i in INSTANCES.values()]}
 
 
 @app.post("/admin/instances")
