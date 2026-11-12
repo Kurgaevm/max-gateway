@@ -872,6 +872,16 @@ async def max_qr_start(inst: Inst) -> dict:
     return {"ok": True, "stage": inst.stage, "qr_url": inst.qr_url}
 
 
+_BOOT_TASKS: set[asyncio.Task] = set()
+
+async def _boot_client(inst) -> None:
+    try:
+        await start_client(inst)
+    except Exception as e:  # noqa: BLE001
+        inst.stage = "error"
+        inst.error = str(e)
+        log.warning("start %s failed: %s", inst.name, e)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_instances()
@@ -889,12 +899,11 @@ async def lifespan(app: FastAPI):
         has_session = inst.phone or os.path.exists(os.path.join(
             SESSIONS_DIR, inst.name + (".db" if inst.type == "max" else ".session")))
         if has_session:
-            try:
-                await start_client(inst)
-            except Exception as e:  # noqa: BLE001
-                inst.stage = "error"
-                inst.error = str(e)
-                log.warning("start %s failed: %s", inst.name, e)
+            # Стартуем в фоне: недоступный канал (например, TG из сети без
+            # доступа к DC) не должен блокировать startup и ронять весь шлюз.
+            t = asyncio.create_task(_boot_client(inst))
+            _BOOT_TASKS.add(t)
+            t.add_done_callback(_BOOT_TASKS.discard)
     yield
     for inst in list(INSTANCES.values()):
         if inst.type == "vk":
