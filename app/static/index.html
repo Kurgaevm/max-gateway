@@ -72,56 +72,6 @@
   .loginblock .row { margin-bottom:8px; }
   .hookline { font-size:12px; color:var(--mut); word-break:break-all; margin-top:6px; line-height:1.4; }
 
-  /* ---------- Сообщения ---------- */
-  .filters { display:flex; gap:8px; padding:12px 0; align-items:center; flex-wrap:wrap; }
-  .chip { padding:6px 14px; border-radius:999px; font-size:12.5px; background:#fff; border:1px solid #d6dbe6; color:#4a5470; }
-  .chip.on { background:var(--dark); color:#fff; border-color:var(--dark); }
-  .syncinfo { margin-left:auto; font-size:12px; color:var(--mut); display:flex; gap:10px; align-items:center; }
-
-  .msglayout { display:flex; gap:0; height:calc(100vh - 170px); min-height:520px; background:var(--win); border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 6px 24px rgba(20,30,60,.08); }
-
-  .chats { width:330px; border-right:1px solid var(--line); display:flex; flex-direction:column; flex:none; }
-  .searchbox { margin:12px; display:flex; gap:6px; }
-  .searchbox input { min-width:0; }
-  .chatlist { overflow-y:auto; flex:1; }
-  .chat { display:flex; gap:11px; padding:11px 14px; align-items:center; cursor:pointer; }
-  .chat:hover { background:#f6f8fc; }
-  .chat.sel { background:var(--sel); }
-  .avatar { width:42px; height:42px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:13px; color:#fff; font-weight:600; }
-  .crow { flex:1; min-width:0; }
-  .cname { font-size:13.5px; font-weight:600; color:var(--ink); display:flex; align-items:center; gap:6px; white-space:nowrap; overflow:hidden; }
-  .cname .t { overflow:hidden; text-overflow:ellipsis; }
-  .chbadge { font-size:9.5px; font-weight:700; padding:2px 6px; border-radius:4px; letter-spacing:.4px; flex:none; }
-  .chbadge.max { background:var(--maxbg); color:var(--maxtx); }
-  .chbadge.tg { background:var(--tgbg); color:var(--tgtx); }
-  .chbadge.vk { background:var(--vkbg); color:var(--vktx); }
-  .lastmsg { font-size:12.5px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
-  .cright { text-align:right; flex:none; }
-  .time { font-size:11px; color:var(--soft); }
-  .unread { background:var(--accent); color:#fff; font-size:10.5px; font-weight:700; border-radius:999px; padding:1px 7px; margin-top:5px; display:inline-block; }
-
-  .thread { flex:1; display:flex; flex-direction:column; min-width:0; background:#f7f9fc; }
-  .thead { display:flex; align-items:center; gap:12px; padding:11px 18px; background:#fff; border-bottom:1px solid var(--line); }
-  .tname { font-weight:700; font-size:14.5px; display:flex; gap:8px; align-items:center; }
-  .tsub { font-size:12px; color:var(--mut); margin-top:2px; }
-  .tactions { margin-left:auto; display:flex; gap:8px; }
-  .msgs { flex:1; padding:14px 22px; overflow-y:auto; }
-  .loadolder { text-align:center; margin-bottom:10px; }
-  .loadolder button { font-size:12px; color:#4a5470; background:#fff; border:1px solid #d6dbe6; padding:6px 14px; border-radius:999px; }
-  .day { text-align:center; margin:12px 0; }
-  .day span { font-size:11px; color:var(--soft); background:#e8ebf2; padding:3px 10px; border-radius:999px; }
-  .mrow { display:flex; margin-bottom:8px; }
-  .mrow.out { justify-content:flex-end; }
-  .bubble { max-width:64%; padding:9px 13px; border-radius:14px; font-size:13.5px; line-height:1.45; word-break:break-word; white-space:pre-wrap; }
-  .mrow.in .bubble { background:var(--in); border:1px solid var(--line); border-bottom-left-radius:4px; }
-  .mrow.out .bubble { background:var(--out); border-bottom-right-radius:4px; }
-  .meta { font-size:10.5px; color:var(--soft); margin-top:4px; text-align:right; }
-  .att { display:flex; gap:8px; align-items:center; background:rgba(108,63,212,.06); border:1px solid rgba(108,63,212,.18); padding:7px 10px; border-radius:9px; margin-bottom:4px; font-size:12.5px; }
-  .att .dl { color:var(--dark2); font-weight:600; cursor:pointer; text-decoration:underline; background:none; border:none; font-size:12.5px; padding:0; }
-  .composer { display:flex; gap:10px; padding:12px 18px; background:#fff; border-top:1px solid var(--line); align-items:center; }
-  .composer input { flex:1; }
-  .empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--soft); font-size:14px; flex-direction:column; gap:10px; }
-
   #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--dark); color:#fff; border:none; padding:10px 18px; border-radius:10px; display:none; font-size:13.5px; max-width:90vw; z-index:50; box-shadow:0 8px 24px rgba(0,0,0,.25); }
 
   /* ---------- Вебхуки ---------- */
@@ -153,7 +103,6 @@
   <div class="logo">MAX Шлюз</div>
   <div class="tabs">
     <button class="tab active" data-tab="inst" onclick="showTab('inst')">Инстансы</button>
-    <button class="tab" data-tab="msg" onclick="showTab('msg')">💬 Сообщения</button>
     <button class="tab" data-tab="hooks" onclick="showTab('hooks')">Вебхуки</button>
     <button class="tab" data-tab="salons" id="tabSalons" onclick="showTab('salons')">👥 Салоны</button>
   </div>
@@ -192,54 +141,6 @@
   </div>
 </div>
 
-<div class="page" id="page-msg">
-  <div class="filters">
-    <button class="chip on" data-f="all" onclick="setFilter(this)">Все каналы</button>
-    <button class="chip" data-f="max" onclick="setFilter(this)">MAX</button>
-    <button class="chip" data-f="telegram" onclick="setFilter(this)">Telegram</button>
-    <button class="chip" data-f="vk" onclick="setFilter(this)">ВК</button>
-    <button class="chip" data-f="unread" onclick="setFilter(this)">Непрочитанные</button>
-    <div class="syncinfo">
-      <span id="storeInfo"></span>
-      <button class="btn ghost" id="syncBtn" onclick="importHistory()">⤓ Импорт истории</button>
-    </div>
-  </div>
-
-  <div class="msglayout">
-    <div class="chats">
-      <div class="searchbox">
-        <input id="chatSearch" placeholder="🔍 Поиск по чатам…" oninput="chatSearchDebounced()">
-      </div>
-      <div class="chatlist" id="chatList">
-        <div class="empty" style="padding:30px 10px">Список чатов пуст.<br>Нажмите «Импорт истории» или дождитесь сообщений.</div>
-      </div>
-    </div>
-    <div class="thread">
-      <div id="threadEmpty" class="empty">
-        <div style="font-size:34px">💬</div>
-        <div>Выберите чат слева</div>
-      </div>
-      <div id="threadBody" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
-        <div class="thead">
-          <div class="avatar" id="thAvatar">?</div>
-          <div style="min-width:0">
-            <div class="tname" id="thName">—</div>
-            <div class="tsub" id="thSub"></div>
-          </div>
-          <div class="tactions">
-            <button class="btn ghost" onclick="deepSync()" id="deepBtn">⤓ Дозагрузить историю</button>
-          </div>
-        </div>
-        <div class="msgs" id="msgsBox"></div>
-        <div class="composer">
-          <input id="replyText" placeholder="Ответить от имени аккаунта…" onkeydown="if(event.key==='Enter')sendReply()">
-          <button class="btn" onclick="sendReply()">Отправить</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <div class="page" id="page-hooks">
   <div class="card" style="max-width:760px">
     <h2>Вебхуки инстансов (n8n и другие получатели)</h2>
@@ -256,7 +157,7 @@
       <input id="salonPhone" placeholder="Телефон, напр. +79990000000">
       <button class="btn" onclick="inviteSalon()">Создать кабинет</button>
     </div>
-    <div class="hint">Создаётся личный кабинет: ключ доступа отправьте салону, он входит им на вкладке «Инстансы» и видит только свои аккаунты и сообщения.</div>
+    <div class="hint">Создаётся личный кабинет: ключ доступа отправьте салону, он входит им на вкладке «Инстансы» и видит только свои аккаунты и вебхуки.</div>
   </div>
   <div id="salonsList" style="max-width:760px"></div>
 </div>
@@ -270,9 +171,6 @@ let SELCH={};                       // channel type -> selected instance name
 try{SELCH=JSON.parse(localStorage.getItem(LS_SELCH)||'{}')||{};}catch(e){SELCH={};}
 let INSTMAP={};                     // name -> {type,phone,stage,connected,...}
 let HOOKPRESETS={client:'',personal:''};
-let FILTER='all', SEARCHQ='';
-let SEL=null;                       // {inst, chat_key, title}
-let OLDEST=null;
 let ROLE='admin', PERMS=null, SALONINFO=null, HEALTH={};
 const CHANNELS=[
   {t:'max', title:'MAX аккаунт', tag:'max', kind:'MAX', chpath:'maxgw'},
@@ -295,7 +193,6 @@ async function api(path,method='GET',body=null){
 function showTab(t){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+t));
-  if(t==='msg') loadChats();
   if(t==='hooks') loadHooks();
   if(t==='salons') loadSalons();
 }
@@ -306,7 +203,6 @@ function applyRole(){
   document.getElementById('tabSalons').style.display=ROLE==='admin'?'':'none';
   const who=document.getElementById('connInfo');
   if(ROLE==='salon'&&SALONINFO) who.textContent=`кабинет: ${SALONINFO.name}`;
-  const sb=document.getElementById('syncBtn'); if(sb) sb.style.display=can('history')?'':'none';
 }
 function selOf(t){
   const list=Object.keys(INSTMAP).filter(n=>INSTMAP[n].type===t);
@@ -779,205 +675,11 @@ function renderSalons(){
   }
 }
 
-/* ================= Сообщения ================= */
-function setFilter(el){
-  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
-  el.classList.add('on');
-  FILTER=el.dataset.f;
-  loadChats();
-}
-let searchTimer=null;
-function chatSearchDebounced(){clearTimeout(searchTimer);searchTimer=setTimeout(()=>{SEARCHQ=document.getElementById('chatSearch').value.trim();loadChats();},350);}
-
-function instsForFilter(){
-  if(FILTER==='all'||FILTER==='unread') return '';
-  return Object.entries(INSTMAP).filter(([,i])=>i.type===FILTER).map(([n])=>n).join(',');
-}
-const PALETTE=['#6b3fd4','#0e8a74','#e07b39','#3b4a7d','#b0435e','#2e8b57','#8a6d3b','#556677','#a2508c','#3178c6'];
-function colorFor(k){let h=0;for(const ch of String(k))h=(h*31+ch.charCodeAt(0))>>>0;return PALETTE[h%PALETTE.length];}
-function initials(t){t=String(t||'').trim();if(!t)return'?';const p=t.split(/\s+/);return(p[0][0]+(p[1]?.[0]||'')).toUpperCase();}
-function fmtTime(ts){
-  const d=new Date(ts*1000),now=new Date();
-  if(d.toDateString()===now.toDateString())return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
-  const yest=new Date(now);yest.setDate(now.getDate()-1);
-  if(d.toDateString()===yest.toDateString())return 'вчера';
-  return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
-}
-function kindBadge(inst){const t=INSTMAP[inst]?.type;return t==='telegram'?'<span class="chbadge tg">TG</span>':t==='vk'?'<span class="chbadge vk">ВК</span>':'<span class="chbadge max">MAX</span>';}
-
-async function loadChats(){
-  try{
-    const insts=instsForFilter();
-    const q=SEARCHQ?`&q=${encodeURIComponent(SEARCHQ)}`:'';
-    const un=FILTER==='unread'?'&unread=1':'';
-    const r=await api(`/admin/chats?insts=${encodeURIComponent(insts)}${q}${un}&limit=300`);
-    const box=document.getElementById('chatList');box.innerHTML='';
-    if(!r.items.length){box.innerHTML='<div class="empty" style="padding:30px 10px">Ничего не найдено.<br>Импортируйте историю или дождитесь сообщений.</div>';}
-    for(const c of r.items){
-      const d=document.createElement('div');
-      d.className='chat'+(SEL&&SEL.inst===c.inst&&SEL.chat_key===c.chat_key?' sel':'');
-      const title=c.title||('chat '+c.chat_key);
-      const last=c.last_dir==='out'?'Вы: ':'';
-      d.innerHTML=`
-        <div class="avatar" style="background:${colorFor(c.chat_key)}">${esc(initials(title))}</div>
-        <div class="crow">
-          <div class="cname"><span class="t">${esc(title)}</span>${kindBadge(c.inst)}</div>
-          <div class="lastmsg">${esc(last+(c.last_text||''))}</div>
-        </div>
-        <div class="cright"><div class="time">${c.last_ts?fmtTime(c.last_ts):''}</div>${c.unread?`<span class="unread">${c.unread}</span>`:''}</div>`;
-      d.onclick=()=>openChat(c);
-      box.append(d);
-    }
-    api('/admin/store/stats').then(s=>{
-      const parts=Object.entries(s.messages||{}).map(([k,v])=>`${k}: ${v}`);
-      document.getElementById('storeInfo').textContent=parts.length?('в базе: '+parts.join(' · ')):'';
-    }).catch(()=>{});
-  }catch(e){console.error(e);}
-}
-
-async function openChat(c){
-  SEL={inst:c.inst,chat_key:c.chat_key,title:c.title||('chat '+c.chat_key)};
-  OLDEST=null;
-  document.getElementById('threadEmpty').classList.add('hidden');
-  document.getElementById('threadBody').classList.remove('hidden');
-  const av=document.getElementById('thAvatar');
-  av.style.background=colorFor(c.chat_key);av.textContent=initials(SEL.title);
-  document.getElementById('thName').innerHTML=`${esc(SEL.title)} ${kindBadge(c.inst)}`;
-  const kind=(INSTMAP[c.inst]?.type==='telegram')?'Telegram':(INSTMAP[c.inst]?.type==='vk')?'ВК':'MAX';
-  document.getElementById('thSub').textContent=`${kind} · ${c.inst} · ${c.msg_count||0} сообщений в базе`+(c.phone?' · '+c.phone:'')+(c.username?' · @'+c.username:'');
-  await loadThread(true);
-  loadChats();
-}
-
-async function loadThread(initial){
-  if(!SEL) return;
-  try{
-    const before=OLDEST&&!initial?`&before=${OLDEST}`:'';
-    const r=await api(`/admin/thread?inst=${encodeURIComponent(SEL.inst)}&chat=${encodeURIComponent(SEL.chat_key)}&limit=60&read=1${before}`);
-    const box=document.getElementById('msgsBox');
-    if(!r.items.length){
-      if(!initial) toast('Это начало истории в базе');
-      if(initial) box.innerHTML='<div class="empty" style="padding:20px">Пока нет сообщений.<br>Нажмите «Дозагрузить историю».</div>';
-      return;
-    }
-    if(initial){
-      box.innerHTML='';
-      addOlderBtn();
-      for(const m of r.items) box.append(renderMsg(m));
-      OLDEST=r.items[0].ts;
-      box.scrollTop=box.scrollHeight;
-    }else{
-      const btn=document.getElementById('olderBtn');if(btn)btn.remove();
-      const prevH=box.scrollHeight,prevTop=box.scrollTop;
-      let first=box.querySelector('.mrow');
-      for(const m of r.items){
-        const node=renderMsg(m);
-        if(first) box.insertBefore(node,first);else box.append(node);
-        first=node;
-      }
-      OLDEST=r.items[0].ts;
-      addOlderBtn();
-      box.scrollTop=box.scrollHeight-prevH+prevTop;
-    }
-  }catch(e){console.error(e);}
-}
-
-function addOlderBtn(){
-  const box=document.getElementById('msgsBox');
-  const d=document.createElement('div');d.className='loadolder';d.id='olderBtn';
-  d.innerHTML='<button onclick="loadOlder()">↑ Загрузить ещё</button>';
-  box.prepend(d);
-}
-function loadOlder(){
-  const b=document.getElementById('olderBtn');if(b)b.remove();
-  loadThread(false);
-}
-
-function renderMsg(m){
-  const row=document.createElement('div');row.className='mrow '+(m.dir==='out'?'out':'in');
-  const bub=document.createElement('div');bub.className='bubble';
-  let mediaHtml='';
-  if(m.media){
-    try{
-      const md=JSON.parse(m.media);
-      if(m.kind==='voice'){
-        const dur=md.duration?Math.round(md.duration)+'с':'';
-        mediaHtml=`<div class="att">🎤 Голосовое ${esc(dur)}</div>`;
-        if(md.transcript&&!m.text) bub.dataset.tr='1';
-      }else{
-        const t=Array.isArray(md)?(md[0]?.type||'вложение'):'вложение';
-        mediaHtml=`<div class="att">📎 ${esc(String(t))}</div>`;
-      }
-    }catch(e){}
-  }else if(m.kind&&m.kind!=='text'){
-    const ic={voice:'🎤 Голосовое',photo:'📷 Фото',video:'🎬 Видео',sticker:'🎨 Стикер',audio:'🎵 Аудио',document:'📄 Документ',file:'📎 Вложение'}[m.kind];
-    if(ic) mediaHtml=`<div class="att">${ic}</div>`;
-  }
-  if(mediaHtml) bub.insertAdjacentHTML('beforeend',mediaHtml);
-  const txt=document.createElement('div');txt.textContent=m.text||'';
-  if(m.kind==='voice'&&m.text) txt.style.color='#5d6b96';
-  bub.append(txt);
-  const meta=document.createElement('div');meta.className='meta';
-  const who=m.dir==='in'&&m.sender_name?esc(m.sender_name)+' · ':'';
-  meta.innerHTML=`${who}${new Date(m.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`;
-  bub.append(meta);
-  row.append(bub);
-  return row;
-}
-
-async function sendReply(){
-  if(!SEL) return;
-  const inp=document.getElementById('replyText');
-  const text=inp.value.trim();
-  if(!text) return;
-  try{
-    await api(`/i/${SEL.inst}/sendText`,'POST',{chat_id:SEL.chat_key,message:text});
-    inp.value='';
-    await loadThread(true);
-    loadChats();
-  }catch(e){toast('Ошибка отправки: '+e.message);}
-}
-
-async function deepSync(){
-  if(!SEL) return;
-  const btn=document.getElementById('deepBtn');btn.disabled=true;btn.textContent='⏳ Загружаю…';
-  try{
-    await api(`/i/${SEL.inst}/history?query=${encodeURIComponent(SEL.chat_key)}&limit=500`);
-    toast('История чата догружена');
-    await loadThread(true);loadChats();
-  }catch(e){toast('Ошибка: '+e.message);}
-  finally{btn.disabled=false;btn.textContent='⤓ Дозагрузить историю';}
-}
-
-async function importHistory(){
-  const names=Object.entries(INSTMAP).filter(([,i])=>i.stage==='authorized'&&i.type!=='vk').map(([n])=>n);
-  if(!names.length){toast('Нет подключённых аккаунтов');return;}
-  if(!confirm(`Импортировать историю (${names.join(', ')})?\nДо 50 последних чатов на аккаунт, это может занять пару минут.`)) return;
-  const btn=document.getElementById('syncBtn');btn.disabled=true;
-  let done=0,total=0;
-  for(const n of names){
-    btn.textContent=`⏳ ${n}… (${done} чатов)`;
-    try{
-      const r=await api(`/i/${n}/syncHistory`,'POST',{types:'user,group',dialogs:50,per_chat:200});
-      done+=r.chats||0;total+=r.messages||0;
-      toast(`${n}: ${r.chats} чатов, ${r.messages} сообщений`);
-    }catch(e){toast(`${n}: ошибка — ${e.message}`);}
-  }
-  btn.disabled=false;btn.textContent='⤓ Импорт истории';
-  loadChats();
-}
-
 /* ================= init ================= */
 if(KEY) document.getElementById('adminKey').value=KEY;
 showTab('inst');
-loadOverview();loadChats();
+loadOverview();
 setInterval(loadOverview,10000);
-setInterval(()=>{
-  if(!document.getElementById('page-msg').classList.contains('active'))return;
-  loadChats();
-  const box=document.getElementById('msgsBox');
-  if(SEL&&box.scrollHeight-box.scrollTop-box.clientHeight<120) loadThread(true);
-},12000);
 </script>
 </body>
 </html>
