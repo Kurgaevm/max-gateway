@@ -65,27 +65,34 @@ def attach_handlers(inst: Any, client: TelegramClient) -> None:
             log.exception("[%s] incoming handler failed", inst.name)
 
 
-def _tg_proxy() -> Optional[tuple]:
-    """TG_PROXY=mtproto://host:port?secret=hex — MTProto-прокси для хостов, откуда
-    Telegram DC недоступен напрямую (РФ-блокировки). Пусто/не задано — прямое соединение."""
+def _tg_proxy() -> Optional[dict]:
+    """TG_PROXY=socks5://user:pass@host:port — SOCKS5-прокси для хостов, откуда
+    Telegram DC недоступен напрямую (РФ-блокировки DC-адресов).
+    Telethon 1.4x поддерживает только SOCKS4/5 и HTTP (python-socks), MTProto-прокси
+    из телетона убран — наружу выставляем именно socks5://. Пусто — прямое соединение."""
     raw = os.environ.get("TG_PROXY", "").strip()
     if not raw:
         return None
-    from urllib.parse import urlparse, parse_qs
+    from urllib.parse import urlparse
 
     u = urlparse(raw)
-    if u.scheme != "mtproto" or not u.hostname or not u.port:
-        log.warning("TG_PROXY не понял формат (%s…), работаю напрямую", raw[:24])
+    if u.scheme != "socks5" or not u.hostname or not u.port:
+        log.warning("TG_PROXY: нужен формат socks5://[user:pass@]host:port (получил %s…), работаю напрямую",
+                    raw[:24])
         return None
-    secret = (parse_qs(u.query).get("secret") or [None])[0]
-    return ("mtproto", u.hostname, u.port, secret)
+    proxy: dict = {"proxy_type": "socks5", "addr": u.hostname, "port": u.port}
+    if u.username:
+        proxy["username"] = u.username
+    if u.password:
+        proxy["password"] = u.password
+    return proxy
 
 
 def build_client(inst: Any) -> TelegramClient:
     _require_api()
     proxy = _tg_proxy()
     if proxy:
-        log.info("TG через mtproto-proxy %s:%s", proxy[1], proxy[2])
+        log.info("TG через socks5-proxy %s:%s", proxy["addr"], proxy["port"])
     client = TelegramClient(
         session_path(inst),
         TG_API_ID,
