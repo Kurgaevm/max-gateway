@@ -65,8 +65,27 @@ def attach_handlers(inst: Any, client: TelegramClient) -> None:
             log.exception("[%s] incoming handler failed", inst.name)
 
 
+def _tg_proxy() -> Optional[tuple]:
+    """TG_PROXY=mtproto://host:port?secret=hex — MTProto-прокси для хостов, откуда
+    Telegram DC недоступен напрямую (РФ-блокировки). Пусто/не задано — прямое соединение."""
+    raw = os.environ.get("TG_PROXY", "").strip()
+    if not raw:
+        return None
+    from urllib.parse import urlparse, parse_qs
+
+    u = urlparse(raw)
+    if u.scheme != "mtproto" or not u.hostname or not u.port:
+        log.warning("TG_PROXY не понял формат (%s…), работаю напрямую", raw[:24])
+        return None
+    secret = (parse_qs(u.query).get("secret") or [None])[0]
+    return ("mtproto", u.hostname, u.port, secret)
+
+
 def build_client(inst: Any) -> TelegramClient:
     _require_api()
+    proxy = _tg_proxy()
+    if proxy:
+        log.info("TG через mtproto-proxy %s:%s", proxy[1], proxy[2])
     client = TelegramClient(
         session_path(inst),
         TG_API_ID,
@@ -74,6 +93,7 @@ def build_client(inst: Any) -> TelegramClient:
         connection_retries=None,
         retry_delay=3,
         auto_reconnect=True,
+        **({"proxy": proxy} if proxy else {}),
     )
     attach_handlers(inst, client)
     return client
