@@ -57,10 +57,16 @@ def session_path(inst: Any) -> str:
 
 
 def attach_handlers(inst: Any, client: TelegramClient) -> None:
-    @client.on(events.NewMessage(incoming=True))
+    # incoming=None: и входящие, и исходящие. Исходящие (наш API и человек из приложения
+    # на любом устройстве — Telegram доставляет свои сообщения всем сессиям) нужны
+    # инстансам с флагом outgoing_webhooks: кабинет по ним видит «человек взял диалог».
+    @client.on(events.NewMessage())
     async def _on_message(event: Any) -> None:
         try:
-            await handle_incoming(inst, event)
+            if getattr(event, "out", False):
+                await handle_outgoing(inst, event)
+            else:
+                await handle_incoming(inst, event)
         except Exception:  # noqa: BLE001
             log.exception("[%s] incoming handler failed", inst.name)
 
@@ -485,6 +491,65 @@ async def handle_incoming(inst: Any, event: Any) -> None:
         except Exception as e:  # noqa: BLE001
             inst.last_webhook = {"error": str(e)}
             log.warning("[%s] webhook failed: %s", inst.name, e)
+
+
+async def handle_outgoing(inst: Any, event: Any) -> None:
+    """Собственное исходящее TG (человек из приложения на любом устройстве или наш API).
+    На инстансах с флагом outgoing_webhooks — событие outgoingMessageReceived:
+    кабинет отличает эхо своих отправок (пред-регистрация текста) от ручного ответа
+    человека и глушит агента диалога. Без флага — тишина, как раньше."""
+    if not getattr(inst, "outgoing_webhooks", False):
+        return
+    from main import deliver_webhook
+
+    msg = event.message
+    me_id = inst.me
+    chat_id = event.chat_id  # маркированный id: в личных чатах = id собеседника
+    if chat_id is None or chat_id < 0:
+        return  # группы/каналы — не диалог клиента
+    if me_id is not None and int(chat_id) == int(me_id):
+        return  # заметки себе (Saved messages)
+
+    text = (msg.message or "").strip()
+    if msg.media is not None:
+        message_data = {
+            "typeMessage": "attachmentMessage",
+            "attaches": [{"type": _attach_kind(msg)}],
+        }
+        if text:
+            message_data["caption"] = text
+    elif text:
+        message_data = {
+            "typeMessage": "textMessage",
+            "textMessageData": {"textMessage": text},
+        }
+    else:
+        return
+    payload = {
+        "typeWebhook": "outgoingMessageReceived",
+        "instanceData": {
+            "idInstance": 1,
+            "instanceName": inst.name,
+            "wid": inst.phone,
+            "typeInstance": "telegram",
+        },
+        "timestamp": int(time.time()),
+        "idMessage": str(msg.id),
+        "senderData": {
+            "chatId": str(chat_id),
+            "rawChatId": str(chat_id),
+            "senderId": str(me_id) if me_id is not None else None,
+            "senderName": None,
+            "senderPhoneNumber": inst.phone,
+        },
+        "messageData": message_data,
+    }
+    try:
+        STORE.record_payload(inst.name, "telegram", payload)
+    except Exception:  # noqa: BLE001
+        log.exception("[%s] store write (outgoing) failed", inst.name)
+    log.info("[%s] tg outgoing to %s: %s", inst.name, chat_id, str(text or "<вложение>")[:120])
+    await deliver_webhook(inst, payload)
 
 
 # ---------------------------------------------------------------- actions

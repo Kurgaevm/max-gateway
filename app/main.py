@@ -167,12 +167,17 @@ STT_PROMPT = os.environ.get(
 class Inst:
     def __init__(self, name: str, phone: Optional[str] = None,
                  api_key: Optional[str] = None, webhook_url: str = "",
-                 created: Optional[float] = None, type: str = "max") -> None:
+                 created: Optional[float] = None, type: str = "max",
+                 outgoing_webhooks: bool = False) -> None:
         self.name = name
         self.type = type  # max | telegram | vk
         self.phone = phone
         self.api_key = api_key or secrets.token_hex(24)
         self.webhook_url = webhook_url or ""
+        # слать и исходящие (outgoingMessageReceived) в вебхук инстанса — opt-in:
+        # нужно кабинету для «человек ответил из приложения = пауза агента»;
+        # остальные потребители вебхуков (n8n салонов) новых событий не получают
+        self.outgoing_webhooks = bool(outgoing_webhooks)
         self.created = created or time.time()
         # runtime
         self.stage = "idle"
@@ -225,6 +230,7 @@ class Inst:
             "connected": self._live_connected(),
             "me": self.me,
             "webhook_url": self.webhook_url or GLOBAL_WEBHOOK_URL or None,
+            "outgoing_webhooks": self.outgoing_webhooks,
         }
 
     def status(self) -> dict:
@@ -239,6 +245,7 @@ class Inst:
             "connected": self._live_connected(),
             "qr_url": self.qr_url,
             "webhook_url": self.webhook_url or "",
+            "outgoing_webhooks": self.outgoing_webhooks,
             "last_incoming": self.last_incoming,
             "last_webhook": self.last_webhook,
         }
@@ -256,6 +263,7 @@ def save_instances() -> None:
                 "phone": i.phone,
                 "api_key": i.api_key,
                 "webhook_url": i.webhook_url,
+                "outgoing_webhooks": i.outgoing_webhooks,
                 "created": i.created,
                 "chat_map": {str(k): v for k, v in i.chat_map.items()},
                 "known_chats": sorted(i.known_chats),
@@ -637,7 +645,8 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     me_id = inst.me
     sid = getattr(message, "sender", None)  # int | None: sender user id
     if me_id is not None and sid is not None and int(sid) == int(me_id):
-        return  # собственное исходящее
+        await handle_outgoing(inst, message)  # опционально: outgoingMessageReceived
+        return
     text = getattr(message, "text", None)
     chat_id = getattr(message, "chat_id", None)
     mid = getattr(message, "id", None)
@@ -705,16 +714,85 @@ async def handle_incoming(inst: Inst, message: Any, c: Client) -> None:
     log.info("[%s] incoming from %s: %s", inst.name, payload["senderData"]["senderId"],
              str(preview)[:120])
 
-    hook = inst.webhook_url or GLOBAL_WEBHOOK_URL
-    if hook:
+    await deliver_webhook(inst, payload)
+
+
+async def handle_outgoing(inst: Inst, message: Any) -> None:
+    """Собственное исходящее MAX (человек из приложения на любом устройстве или наш API).
+    На инстансах с включённым флагом outgoing_webhooks — событие outgoingMessageReceived:
+    кабинет отличает эхо своих отправок (пред-регистрация текста) от ручного ответа
+    человека и глушит агента диалога. Без флага — тишина, как раньше."""
+    if not inst.outgoing_webhooks:
+        return
+    chat_id = getattr(message, "chat_id", None)
+    mid = getattr(message, "id", None)
+    me_id = inst.me
+    try:
+        raw = int(chat_id)
+    except (TypeError, ValueError):
+        return
+    # Green-API dialect: в личке chatId = user_id собеседника; raw = me ^ peer → peer = raw ^ me
+    if me_id is not None:
+        peer = raw ^ int(me_id)
+    else:  # себя не знаем — обратный просмотр выученной карты чатов
+        peer = next((uid for uid, rchat in inst.chat_map.items() if rchat == raw), raw)
+    if peer < 0 or (me_id is not None and peer == int(me_id)):
+        return  # группы и заметки себе — не диалог клиента
+
+    text = getattr(message, "text", None)
+    attaches = list(getattr(message, "attaches", None) or [])
+    if text:
+        message_data = {
+            "typeMessage": "textMessage",
+            "textMessageData": {"textMessage": text},
+        }
+    elif attaches:
+        message_data = {
+            "typeMessage": "attachmentMessage",
+            "attaches": [{"type": attach_type(a)} for a in attaches],
+        }
+    else:
+        return
+    payload = {
+        "typeWebhook": "outgoingMessageReceived",
+        "instanceData": {
+            "idInstance": 1,
+            "instanceName": inst.name,
+            "wid": inst.phone,
+            "typeInstance": inst.type,
+        },
+        "timestamp": int(time.time()),
+        "idMessage": str(mid) if mid is not None else uuid.uuid4().hex,
+        "senderData": {
+            "chatId": str(peer),
+            "rawChatId": str(chat_id),
+            "senderId": str(me_id) if me_id is not None else None,
+            "senderName": None,
+            "senderPhoneNumber": inst.phone,
+        },
+        "messageData": message_data,
+    }
+    if STORE is not None:
         try:
-            async with httpx.AsyncClient(timeout=15) as hc:
-                r = await hc.post(hook, json=payload)
-                inst.last_webhook = {"status": r.status_code}
-                log.info("[%s] webhook delivered: %s", inst.name, r.status_code)
-        except Exception as e:  # noqa: BLE001
-            inst.last_webhook = {"error": str(e)}
-            log.warning("[%s] webhook failed: %s", inst.name, e)
+            STORE.record_payload(inst.name, inst.type, payload)
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] store write (outgoing) failed", inst.name)
+    log.info("[%s] outgoing to %s: %s", inst.name, peer, str(text or "<вложение>")[:120])
+    await deliver_webhook(inst, payload)
+
+
+async def deliver_webhook(inst: Inst, payload: dict) -> None:
+    hook = inst.webhook_url or GLOBAL_WEBHOOK_URL
+    if not hook:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15) as hc:
+            r = await hc.post(hook, json=payload)
+            inst.last_webhook = {"status": r.status_code}
+            log.info("[%s] webhook delivered: %s", inst.name, r.status_code)
+    except Exception as e:  # noqa: BLE001
+        inst.last_webhook = {"error": str(e)}
+        log.warning("[%s] webhook failed: %s", inst.name, e)
 
 
 def attach_handlers(inst: Inst, c: Client) -> None:
@@ -1092,6 +1170,10 @@ class WebhookBody(BaseModel):
     url: str = ""
 
 
+class OutgoingBody(BaseModel):
+    enabled: bool = False
+
+
 class SalonCreateBody(BaseModel):
     name: str
     phone: str = ""
@@ -1449,6 +1531,22 @@ async def set_webhook(name: str, body: WebhookBody, x_api_key: str = Header(defa
     inst.webhook_url = body.url.rstrip("/")
     save_instances()
     return {"ok": True, "webhook_url": inst.webhook_url}
+
+
+@app.post("/admin/instances/{name}/outgoing")
+async def set_outgoing(name: str, body: OutgoingBody, x_api_key: str = Header(default="")):
+    """Включить/выключить исходящие вебхуки инстанса (outgoingMessageReceived).
+    Opt-in: нужно кабинету («человек ответил из приложения = пауза агента»);
+    остальные потребители вебхуков новых событий не получают."""
+    require_admin(x_api_key)
+    if not owns_instance(name):
+        raise HTTPException(status_code=403,
+                            detail="инстанс не привязан к этому кабинету")
+    require_perm("webhook")
+    inst = get_inst(name)
+    inst.outgoing_webhooks = bool(body.enabled)
+    save_instances()
+    return {"ok": True, "outgoing_webhooks": inst.outgoing_webhooks}
 
 
 @app.delete("/admin/instances/{name}")
